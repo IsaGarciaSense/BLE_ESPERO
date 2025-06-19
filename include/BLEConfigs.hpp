@@ -187,6 +187,13 @@ esp_err_t ble_common_init(void);
 esp_err_t ble_common_deinit(void);
 
 /**
+ * @brief Checks if BLE common subsystem is initialized
+ * 
+ * @return bool True if initialized, false otherwise
+ */
+bool ble_common_is_initialized(void);
+
+/**
  * @brief Sets the general event callback function
  * 
  * @param callback Function to call for general BLE events

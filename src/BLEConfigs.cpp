@@ -17,7 +17,6 @@
 /*                              Version Information                           */
 /******************************************************************************/
 
-// ✅ AGREGADO: Definiciones de versión faltantes
 #define BLE_LIBRARY_VERSION_MAJOR  0
 #define BLE_LIBRARY_VERSION_MINOR  0
 #define BLE_LIBRARY_VERSION_PATCH  1
@@ -30,6 +29,9 @@ static const char* BLE_TAG = "BLE_COMMON";
 static ble_state_t ble_global_state = BLE_STATE_UNINITIALIZED;
 static ble_event_callback_t global_event_callback = nullptr;
 static ble_log_callback_t global_log_callback = nullptr;
+
+// ✅ AGREGADO: Variable para controlar la inicialización
+static bool ble_common_initialized = false;
 
 /******************************************************************************/
 /*                              Default UUIDs                                 */
@@ -66,53 +68,78 @@ const uint8_t BLE_DEFAULT_CUSTOM_CHAR_UUID_128[BLE_UUID_128_LEN] = {
 esp_err_t ble_common_init(void) {
     esp_err_t ret;
 
+    // ✅ CORREGIDO: Verificar si ya está inicializado
+    if (ble_common_initialized) {
+        ble_log(ESP_LOG_INFO, "BLE common subsystem already initialized, skipping...");
+        return ESP_OK;
+    }
+
     ble_log(ESP_LOG_INFO, "Initializing BLE common subsystem");
 
-    // Initialize NVS
-    ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to initialize NVS: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
+    // ✅ MEJORADO: No inicializar NVS aquí ya que debe hacerse en main()
+    // El NVS debe inicializarse en main() antes de cualquier operación BLE
+    
     // Release memory for Classic Bluetooth (we only use BLE)
+    // ✅ MEJORADO: Verificar si ya se liberó la memoria
     ret = esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
-    if (ret != ESP_OK) {
-        ble_log(ESP_LOG_WARN, "Failed to release Classic BT memory: %s", esp_err_to_name(ret));
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_ERROR, "Failed to release Classic BT memory: %s", esp_err_to_name(ret));
+        return ret;
+    } else if (ret == ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_DEBUG, "Classic BT memory already released");
+    } else {
+        ble_log(ESP_LOG_DEBUG, "Classic BT memory released successfully");
     }
 
+    // ✅ MEJORADO: Verificar si el controlador ya está inicializado
     // Initialize Bluetooth controller
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ret = esp_bt_controller_init(&bt_cfg);
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ble_log(ESP_LOG_ERROR, "Failed to initialize BT controller: %s", esp_err_to_name(ret));
         return ret;
+    } else if (ret == ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_DEBUG, "BT controller already initialized");
+    } else {
+        ble_log(ESP_LOG_DEBUG, "BT controller initialized successfully");
     }
 
+    // ✅ MEJORADO: Verificar si ya está habilitado
     // Enable BLE mode only
     ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ble_log(ESP_LOG_ERROR, "Failed to enable BT controller: %s", esp_err_to_name(ret));
         return ret;
+    } else if (ret == ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_DEBUG, "BT controller already enabled");
+    } else {
+        ble_log(ESP_LOG_DEBUG, "BT controller enabled successfully");
     }
 
+    // ✅ MEJORADO: Verificar si Bluedroid ya está inicializado
     // Initialize Bluedroid stack
     ret = esp_bluedroid_init();
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ble_log(ESP_LOG_ERROR, "Failed to initialize Bluedroid: %s", esp_err_to_name(ret));
         return ret;
+    } else if (ret == ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_DEBUG, "Bluedroid already initialized");
+    } else {
+        ble_log(ESP_LOG_DEBUG, "Bluedroid initialized successfully");
     }
 
     ret = esp_bluedroid_enable();
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ble_log(ESP_LOG_ERROR, "Failed to enable Bluedroid: %s", esp_err_to_name(ret));
         return ret;
+    } else if (ret == ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_DEBUG, "Bluedroid already enabled");
+    } else {
+        ble_log(ESP_LOG_DEBUG, "Bluedroid enabled successfully");
     }
 
+    // ✅ AGREGADO: Marcar como inicializado
+    ble_common_initialized = true;
     ble_global_state = BLE_STATE_INITIALIZED;
     ble_log(ESP_LOG_INFO, "BLE common subsystem initialized successfully");
 
@@ -120,36 +147,54 @@ esp_err_t ble_common_init(void) {
 }
 
 esp_err_t ble_common_deinit(void) {
+    // ✅ CORREGIDO: Verificar si está inicializado antes de desinicializar
+    if (!ble_common_initialized) {
+        ble_log(ESP_LOG_DEBUG, "BLE common subsystem not initialized, skipping deinit");
+        return ESP_OK;
+    }
+
     ble_log(ESP_LOG_INFO, "Deinitializing BLE common subsystem");
 
     esp_err_t ret = ESP_OK;
+    esp_err_t final_ret = ESP_OK;
 
     // Disable and deinitialize Bluedroid
-    if (esp_bluedroid_disable() != ESP_OK) {
-        ble_log(ESP_LOG_WARN, "Failed to disable Bluedroid");
-        ret = ESP_FAIL;
+    ret = esp_bluedroid_disable();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_WARN, "Failed to disable Bluedroid: %s", esp_err_to_name(ret));
+        final_ret = ESP_FAIL;
     }
 
-    if (esp_bluedroid_deinit() != ESP_OK) {
-        ble_log(ESP_LOG_WARN, "Failed to deinitialize Bluedroid");
-        ret = ESP_FAIL;
+    ret = esp_bluedroid_deinit();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_WARN, "Failed to deinitialize Bluedroid: %s", esp_err_to_name(ret));
+        final_ret = ESP_FAIL;
     }
 
     // Disable and deinitialize Bluetooth controller
-    if (esp_bt_controller_disable() != ESP_OK) {
-        ble_log(ESP_LOG_WARN, "Failed to disable BT controller");
-        ret = ESP_FAIL;
+    ret = esp_bt_controller_disable();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_WARN, "Failed to disable BT controller: %s", esp_err_to_name(ret));
+        final_ret = ESP_FAIL;
     }
 
-    if (esp_bt_controller_deinit() != ESP_OK) {
-        ble_log(ESP_LOG_WARN, "Failed to deinitialize BT controller");
-        ret = ESP_FAIL;
+    ret = esp_bt_controller_deinit();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ble_log(ESP_LOG_WARN, "Failed to deinitialize BT controller: %s", esp_err_to_name(ret));
+        final_ret = ESP_FAIL;
     }
 
+    // ✅ AGREGADO: Marcar como no inicializado
+    ble_common_initialized = false;
     ble_global_state = BLE_STATE_UNINITIALIZED;
     ble_log(ESP_LOG_INFO, "BLE common subsystem deinitialized");
 
-    return ret;
+    return final_ret;
+}
+
+// ✅ AGREGADO: Función para verificar el estado de inicialización
+bool ble_common_is_initialized(void) {
+    return ble_common_initialized;
 }
 
 void ble_set_event_callback(ble_event_callback_t callback) {
@@ -196,7 +241,7 @@ esp_err_t ble_generate_auth_key(char* key_buffer, size_t key_length) {
     const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     
     for (size_t i = 0; i < key_length - 1; i++) {
-        uint32_t random_val = esp_random();  // ✅ CORREGIDO: Ahora funciona con el include
+        uint32_t random_val = esp_random();
         key_buffer[i] = charset[random_val % (sizeof(charset) - 1)];
     }
     key_buffer[key_length - 1] = '\0';
@@ -279,9 +324,10 @@ esp_err_t ble_create_default_security_config(ble_security_config_t* config,
 void ble_print_version_info(void) {
     ble_log(ESP_LOG_INFO, "=== BLE Library Information ===");
     ble_log(ESP_LOG_INFO, "Version: %d.%d.%d", 
-            BLE_LIBRARY_VERSION_MAJOR, BLE_LIBRARY_VERSION_MINOR, BLE_LIBRARY_VERSION_PATCH);  // ✅ CORREGIDO
+            BLE_LIBRARY_VERSION_MAJOR, BLE_LIBRARY_VERSION_MINOR, BLE_LIBRARY_VERSION_PATCH);
     ble_log(ESP_LOG_INFO, "ESP-IDF Version: %s", esp_get_idf_version());
     ble_log(ESP_LOG_INFO, "Compile Time: %s %s", __DATE__, __TIME__);
+    ble_log(ESP_LOG_INFO, "Initialization State: %s", ble_common_initialized ? "INITIALIZED" : "NOT INITIALIZED");
     ble_log(ESP_LOG_INFO, "===============================");
 }
 

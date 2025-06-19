@@ -50,11 +50,20 @@ BLEClient::BLEClient()
     , reconnect_task_handle_(nullptr)
     , state_mutex_(nullptr)
     , connection_start_time_(0)
-    , last_data_time_(0) {
+    , last_data_time_(0)
+    // ✅ NUEVAS INICIALIZACIONES
+    , any_device_found_cb_(nullptr)
+    , scan_started_cb_(nullptr)
+    , scan_completed_cb_(nullptr)
+    , discovery_mode_(false)
+    , current_scan_duration_(0)
+    , scan_start_time_(0)
+    , found_devices_count_(0)
+    , target_device_found_in_scan_(false) {
     
     // Initialize default configuration
     memset(&config_, 0, sizeof(config_));
-    strncpy(config_.target_device_name, "ESP32_BLE_Server", BLE_MAX_DEVICE_NAME_LEN - 1);
+    strncpy(config_.target_device_name, "154_BLE_Server", BLE_MAX_DEVICE_NAME_LEN - 1);
     config_.scan_timeout_ms = BLE_DEFAULT_SCAN_TIMEOUT;
     config_.min_rssi = -90;
     config_.auto_reconnect = true;
@@ -64,12 +73,15 @@ BLEClient::BLEClient()
     config_.read_interval_ms = 5000;
 
     // Initialize security configuration
-    ble_create_default_security_config(&security_config_, BLE_SECURITY_AUTHENTICATED);
+    ble_create_default_security_config(&security_config_, BLE_SECURITY_NONE);
 
     // Initialize device and data structures
     memset(&connected_device_, 0, sizeof(connected_device_));
     memset(&last_data_, 0, sizeof(last_data_));
     memset(&stats_, 0, sizeof(stats_));
+    
+    // ✅ NUEVA INICIALIZACIÓN: Lista de dispositivos encontrados
+    memset(found_devices_, 0, sizeof(found_devices_));
 
     // Create mutex
     state_mutex_ = xSemaphoreCreateMutex();
@@ -387,6 +399,25 @@ void BLEClient::setAuthCallback(ble_client_auth_cb_t callback) {
 }
 
 /******************************************************************************/
+/*                          NUEVOS CALLBACKS EXTENDIDOS                      */
+/******************************************************************************/
+
+void BLEClient::setAnyDeviceFoundCallback(ble_client_any_device_found_cb_t callback) {
+    any_device_found_cb_ = callback;
+    ble_log(ESP_LOG_DEBUG, "Any device found callback registered");
+}
+
+void BLEClient::setScanStartedCallback(ble_client_scan_started_cb_t callback) {
+    scan_started_cb_ = callback;
+    ble_log(ESP_LOG_DEBUG, "Scan started callback registered");
+}
+
+void BLEClient::setScanCompletedCallback(ble_client_scan_completed_cb_t callback) {
+    scan_completed_cb_ = callback;
+    ble_log(ESP_LOG_DEBUG, "Scan completed callback registered");
+}
+
+/******************************************************************************/
 /*                              Status Methods                                */
 /******************************************************************************/
 
@@ -480,6 +511,140 @@ bool BLEClient::performHealthCheck() {
 }
 
 /******************************************************************************/
+/*                          NUEVOS MÉTODOS EXTENDIDOS                        */
+/******************************************************************************/
+
+esp_err_t BLEClient::startDiscoveryScan(uint32_t duration_ms) {
+    ble_log(ESP_LOG_INFO, "Starting discovery scan for %lu ms (all devices)", duration_ms);
+
+    if (state_ == BLE_CLIENT_SCANNING) {
+        ble_log(ESP_LOG_WARN, "Already scanning");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(state_mutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // Configurar modo discovery
+    discovery_mode_ = true;
+    current_scan_duration_ = duration_ms;
+    scan_start_time_ = ble_get_timestamp();
+    target_device_found_in_scan_ = false;
+    
+    state_ = BLE_CLIENT_SCANNING;
+    stats_.scan_count++;
+    
+    xSemaphoreGive(state_mutex_);
+
+    // Llamar callback de inicio
+    if (scan_started_cb_ != nullptr) {
+        scan_started_cb_(duration_ms);
+    }
+
+    // Set scan parameters
+    esp_err_t ret = esp_ble_gap_set_scan_params(&default_scan_params);
+    if (ret != ESP_OK) {
+        ble_log(ESP_LOG_ERROR, "Failed to set scan params: %s", esp_err_to_name(ret));
+        state_ = BLE_CLIENT_IDLE;
+        discovery_mode_ = false;
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t BLEClient::startTargetedScan() {
+    ble_log(ESP_LOG_INFO, "Starting targeted scan for: %s", config_.target_device_name);
+
+    if (state_ == BLE_CLIENT_SCANNING) {
+        ble_log(ESP_LOG_WARN, "Already scanning");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(state_mutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // Configurar modo targeted (normal)
+    discovery_mode_ = false;
+    current_scan_duration_ = config_.scan_timeout_ms;
+    scan_start_time_ = ble_get_timestamp();
+    target_device_found_in_scan_ = false;
+    
+    state_ = BLE_CLIENT_SCANNING;
+    stats_.scan_count++;
+    
+    xSemaphoreGive(state_mutex_);
+
+    // Llamar callback de inicio
+    if (scan_started_cb_ != nullptr) {
+        scan_started_cb_(config_.scan_timeout_ms);
+    }
+
+    // Set scan parameters
+    esp_err_t ret = esp_ble_gap_set_scan_params(&default_scan_params);
+    if (ret != ESP_OK) {
+        ble_log(ESP_LOG_ERROR, "Failed to set scan params: %s", esp_err_to_name(ret));
+        state_ = BLE_CLIENT_IDLE;
+        discovery_mode_ = false;
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+void BLEClient::setScanMode(bool discovery_mode) {
+    discovery_mode_ = discovery_mode;
+    ble_log(ESP_LOG_INFO, "Scan mode set to: %s", discovery_mode ? "DISCOVERY" : "TARGETED");
+}
+
+uint32_t BLEClient::getUniqueDevicesFound() const {
+    return found_devices_count_;
+}
+
+void BLEClient::clearDeviceList() {
+    found_devices_count_ = 0;
+    memset(found_devices_, 0, sizeof(found_devices_));
+    ble_log(ESP_LOG_INFO, "Device list cleared");
+}
+
+const ble_device_info_t* BLEClient::getFoundDevice(uint32_t index) const {
+    if (index >= found_devices_count_) {
+        return nullptr;
+    }
+    return &found_devices_[index];
+}
+
+bool BLEClient::addToFoundDevices(const ble_device_info_t* device_info) {
+    if (device_info == nullptr || found_devices_count_ >= MAX_FOUND_DEVICES) {
+        return false;
+    }
+
+    // Verificar si ya existe
+    if (isDeviceAlreadyFound(device_info->address)) {
+        return false; // Ya existe
+    }
+
+    // Agregar nuevo dispositivo
+    memcpy(&found_devices_[found_devices_count_], device_info, sizeof(ble_device_info_t));
+    found_devices_count_++;
+    
+    ble_log(ESP_LOG_DEBUG, "Added device to list: %s (total: %lu)", 
+            device_info->name, found_devices_count_);
+    return true;
+}
+
+bool BLEClient::isDeviceAlreadyFound(const esp_bd_addr_t address) const {
+    for (uint32_t i = 0; i < found_devices_count_; i++) {
+        if (memcmp(found_devices_[i].address, address, ESP_BD_ADDR_LEN) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/******************************************************************************/
 /*                              Internal Methods                              */
 /******************************************************************************/
 
@@ -492,7 +657,9 @@ void BLEClient::gapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t
         case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
             ble_log(ESP_LOG_DEBUG, "Scan parameters set");
             if (param->scan_param_cmpl.status == ESP_BT_STATUS_SUCCESS) {
-                esp_ble_gap_start_scanning(instance_->config_.scan_timeout_ms / 1000);
+                esp_ble_gap_start_scanning(instance_->current_scan_duration_ > 0 ? 
+                                          instance_->current_scan_duration_ / 1000 : 
+                                          instance_->config_.scan_timeout_ms / 1000);
             }
             break;
             
@@ -566,12 +733,14 @@ void BLEClient::gattcCallback(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if
     }
 }
 
+// Reemplaza la función verifyTargetDevice completa con esta versión corregida:
+
 bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scan_result) {
     char device_name[BLE_MAX_DEVICE_NAME_LEN] = {0};
     bool has_target_service = false;
     bool name_match = false;
     
-    // Extract device name and service UUIDs from advertising data
+    // ✅ PRIMERO: Extraer nombre del dispositivo de los datos de advertising
     if (scan_result->scan_rst.adv_data_len > 0) {
         uint8_t *adv_data = scan_result->scan_rst.ble_adv;
         uint8_t adv_data_len = scan_result->scan_rst.adv_data_len;
@@ -582,7 +751,7 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scan_result) {
             
             uint8_t type = adv_data[i + 1];
             
-            // Check device name
+            // Check device name FIRST
             if (type == 0x09 || type == 0x08) {  // Complete or shortened local name
                 uint8_t name_len = length - 1;
                 if (name_len > BLE_MAX_DEVICE_NAME_LEN - 1) {
@@ -590,13 +759,15 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scan_result) {
                 }
                 memcpy(device_name, &adv_data[i + 2], name_len);
                 device_name[name_len] = '\0';
+                
+                ble_log(ESP_LOG_DEBUG, "Extracted device name: '%s' (len=%d)", device_name, name_len);
             }
-            
             // Check service UUIDs
             else if (security_config_.use_custom_uuids) {
                 if (type == 0x07 && length == 17) {  // Complete list of 128-bit service UUIDs
                     if (ble_compare_uuid128(&adv_data[i + 2], security_config_.service_uuid)) {
                         has_target_service = true;
+                        ble_log(ESP_LOG_DEBUG, "Found target service UUID");
                     }
                 }
             }
@@ -605,30 +776,57 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scan_result) {
         }
     }
     
-    // Check name match
-    name_match = (strlen(device_name) > 0 && 
-                  strcmp(device_name, config_.target_device_name) == 0);
+    // SEGUNDO: Debug logging para verificar la extracción
+    ble_log(ESP_LOG_INFO, "=== Device Verification Debug ===");
+    ble_log(ESP_LOG_INFO, "Extracted name: '%s'", device_name);
+    ble_log(ESP_LOG_INFO, "Target name: '%s'", config_.target_device_name);
+    ble_log(ESP_LOG_INFO, "Name length: %d", strlen(device_name));
+    ble_log(ESP_LOG_INFO, "Target length: %d", strlen(config_.target_device_name));
+    ble_log(ESP_LOG_INFO, "RSSI: %d dBm (min: %d)", scan_result->scan_rst.rssi, config_.min_rssi);
+    ble_log(ESP_LOG_INFO, "Security level: %d", security_config_.level);
+    ble_log(ESP_LOG_INFO, "Use custom UUIDs: %s", security_config_.use_custom_uuids ? "YES" : "NO");
     
-    // Check RSSI threshold
-    if (scan_result->scan_rst.rssi < config_.min_rssi) {
-        ble_log(ESP_LOG_DEBUG, "Device %s RSSI too low: %d < %d", 
-                device_name, scan_result->scan_rst.rssi, config_.min_rssi);
-        return false;
+    // TERCERO: Verificar name match
+    if (strlen(device_name) > 0) {
+        name_match = (strcmp(device_name, config_.target_device_name) == 0);
+        ble_log(ESP_LOG_INFO, "String comparison result: %s", name_match ? "MATCH" : "NO MATCH");
+    } else {
+        ble_log(ESP_LOG_WARN, "Device name is empty!");
     }
-    
-    // Apply security level verification
+
+    // Cuarto: Apply security level verification
+    bool security_ok = false;
     switch (security_config_.level) {
         case BLE_SECURITY_NONE:
-            return name_match;
+            security_ok = true;
+            ble_log(ESP_LOG_DEBUG, "Security: NONE - always OK");
+            break;
             
         case BLE_SECURITY_BASIC:
         case BLE_SECURITY_AUTHENTICATED:
         case BLE_SECURITY_ENCRYPTED:
-            return name_match && (has_target_service || !security_config_.use_custom_uuids);
+            security_ok = (has_target_service || !security_config_.use_custom_uuids);
+            ble_log(ESP_LOG_DEBUG, "Security: %s - %s", 
+                    security_config_.use_custom_uuids ? "Custom UUIDs" : "Standard UUIDs",
+                    security_ok ? "OK" : "FAIL");
+            break;
             
         default:
-            return false;
+            security_ok = false;
+            ble_log(ESP_LOG_ERROR, "Unknown security level: %d", security_config_.level);
+            break;
     }
+    
+    // ✅ QUINTO: Final result
+    bool final_result = name_match && security_ok;
+    
+    ble_log(ESP_LOG_INFO, "Verification Summary:");
+    ble_log(ESP_LOG_INFO, "  Name match: %s", name_match ? "✓" : "✗");
+    ble_log(ESP_LOG_INFO, "  Security OK: %s", security_ok ? "✓" : "✗");
+    ble_log(ESP_LOG_INFO, "  FINAL RESULT: %s", final_result ? "TARGET VERIFIED ✓" : "NOT TARGET ✗");
+    ble_log(ESP_LOG_INFO, "==============================");
+    
+    return final_result;
 }
 
 esp_err_t BLEClient::authenticateWithServer() {
@@ -650,30 +848,93 @@ esp_err_t BLEClient::authenticateWithServer() {
     return ESP_OK;
 }
 
+/******************************************************************************/
+/*                       MÉTODO handleScanResult MODIFICADO                  */
+/******************************************************************************/
+
 void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
     esp_ble_gap_cb_param_t *scan_result = param;
     
     switch (scan_result->scan_rst.search_evt) {
         case ESP_GAP_SEARCH_INQ_RES_EVT: {
-            if (verifyTargetDevice(scan_result)) {
+            // ✅ NUEVA FUNCIONALIDAD: Procesar TODOS los dispositivos encontrados
+            
+            // Extraer información del dispositivo
+            ble_device_info_t current_device;
+            memset(&current_device, 0, sizeof(current_device));
+            
+            // Copiar dirección MAC
+            memcpy(current_device.address, scan_result->scan_rst.bda, ESP_BD_ADDR_LEN);
+            current_device.rssi = scan_result->scan_rst.rssi;
+            current_device.last_seen = ble_get_timestamp();
+            
+            // Extraer nombre del dispositivo de los datos de advertising
+            char device_name[BLE_MAX_DEVICE_NAME_LEN] = {0};
+            if (scan_result->scan_rst.adv_data_len > 0) {
+                uint8_t *adv_data = scan_result->scan_rst.ble_adv;
+                uint8_t adv_data_len = scan_result->scan_rst.adv_data_len;
+                
+                for (int i = 0; i < adv_data_len; ) {
+                    uint8_t length = adv_data[i];
+                    if (length == 0) break;
+                    
+                    uint8_t type = adv_data[i + 1];
+                    
+                    // Buscar nombre del dispositivo
+                    if (type == 0x09 || type == 0x08) {  // Complete o shortened local name
+                        uint8_t name_len = length - 1;
+                        if (name_len > BLE_MAX_DEVICE_NAME_LEN - 1) {
+                            name_len = BLE_MAX_DEVICE_NAME_LEN - 1;
+                        }
+                        memcpy(device_name, &adv_data[i + 2], name_len);
+                        device_name[name_len] = '\0';
+                        break;
+                    }
+                    
+                    i += length + 1;
+                }
+            }
+            
+            // Si no se encontró nombre, usar "Unknown Device"
+            if (strlen(device_name) == 0) {
+                snprintf(device_name, sizeof(device_name), "Unknown Device");
+            }
+            
+            strncpy(current_device.name, device_name, BLE_MAX_DEVICE_NAME_LEN - 1);
+            
+            // ✅ NUEVA FUNCIONALIDAD: Agregar a lista de dispositivos encontrados
+            bool is_new_device = addToFoundDevices(&current_device);
+            
+            // Verificar si es el dispositivo objetivo
+            bool is_target = verifyTargetDevice(scan_result);
+            if (is_target) {
+                target_device_found_in_scan_ = true;
+            }
+            
+            // ✅ NUEVA FUNCIONALIDAD: Llamar callback para CUALQUIER dispositivo
+            if (any_device_found_cb_ != nullptr) {
+                any_device_found_cb_(&current_device, is_target);
+            }
+            
+            // Funcionalidad original: manejar dispositivo objetivo
+            if (is_target) {
                 char addr_str[18];
                 ble_addr_to_string(scan_result->scan_rst.bda, addr_str);
                 
                 ble_log(ESP_LOG_INFO, "Target device found: %s, RSSI: %d dBm", 
                         addr_str, scan_result->scan_rst.rssi);
                 
-                // Update device info
-                memcpy(connected_device_.address, scan_result->scan_rst.bda, ESP_BD_ADDR_LEN);
-                connected_device_.rssi = scan_result->scan_rst.rssi;
-                connected_device_.last_seen = ble_get_timestamp();
+                // Actualizar información del dispositivo conectado
+                memcpy(&connected_device_, &current_device, sizeof(ble_device_info_t));
                 
-                // Call device found callback
+                // Llamar callback original de dispositivo encontrado
                 bool should_connect = true;
                 if (device_found_cb_ != nullptr) {
                     device_found_cb_(&connected_device_, &should_connect);
                 }
                 
-                if (should_connect) {
+                // Solo conectar si no estamos en modo discovery y se debe conectar
+                if (!discovery_mode_ && should_connect) {
                     esp_ble_gap_stop_scanning();
                     connect(scan_result->scan_rst.bda);
                 }
@@ -682,14 +943,21 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
         }
         
         case ESP_GAP_SEARCH_INQ_CMPL_EVT:
-            ble_log(ESP_LOG_INFO, "Scan completed");
+            ble_log(ESP_LOG_INFO, "Scan completed - Found %lu unique devices (%s target)", 
+                    found_devices_count_, target_device_found_in_scan_ ? "WITH" : "WITHOUT");
+            
             if (state_ == BLE_CLIENT_SCANNING) {
                 state_ = BLE_CLIENT_IDLE;
                 
-                // Auto-retry scan if configured
-                if (config_.auto_reconnect) {
+                // ✅ NUEVA FUNCIONALIDAD: Llamar callback de escaneo completado
+                if (scan_completed_cb_ != nullptr) {
+                    scan_completed_cb_(found_devices_count_, target_device_found_in_scan_);
+                }
+                
+                // Auto-retry solo en modo targeted y si no se encontró el target
+                if (!discovery_mode_ && config_.auto_reconnect && !target_device_found_in_scan_) {
                     vTaskDelay(pdMS_TO_TICKS(config_.reconnect_interval_ms));
-                    startScan();
+                    startTargetedScan();
                 }
             }
             break;
@@ -737,7 +1005,7 @@ void BLEClient::handleDisconnect(esp_ble_gattc_cb_param_t *param) {
     if (config_.auto_reconnect) {
         ble_log(ESP_LOG_INFO, "Scheduling reconnection in %lu ms", config_.reconnect_interval_ms);
         vTaskDelay(pdMS_TO_TICKS(config_.reconnect_interval_ms));
-        startScan();
+        startTargetedScan();
     }
 }
 
@@ -767,7 +1035,7 @@ void BLEClient::handleServiceDiscoveryComplete(esp_ble_gattc_cb_param_t *param) 
     if (service_start_handle_ != 0) {
         ble_log(ESP_LOG_INFO, "Discovering characteristics");
         
-        // ✅ CORREGIDO: Usar la función correcta con todos los parámetros
+        // Usar la función correcta con todos los parámetros
         uint16_t count = 10;  // Máximo número de características a obtener
         esp_gattc_char_elem_t char_elem_result[10];
         uint16_t char_count = count;
@@ -830,14 +1098,11 @@ void BLEClient::handleServiceDiscoveryComplete(esp_ble_gattc_cb_param_t *param) 
     }
 }
 
-
 void BLEClient::handleCharacteristicFound(esp_ble_gattc_cb_param_t *param) {
-    // Este método puede estar vacío o manejar eventos específicos si es necesario
     ble_log(ESP_LOG_DEBUG, "Characteristic event received");
 }
 
 void BLEClient::handleAllCharacteristicsFound(esp_ble_gattc_cb_param_t *param) {
-    // Este método puede estar vacío ya que manejamos todo en handleServiceDiscoveryComplete
     ble_log(ESP_LOG_DEBUG, "All characteristics event received");
 }
 
@@ -969,7 +1234,7 @@ void BLEClient::reconnectTask(void *pvParameters) {
         
         if (!client->isConnected() && client->state_ == BLE_CLIENT_IDLE) {
             ble_log(ESP_LOG_INFO, "Attempting reconnection");
-            client->startScan();
+            client->startTargetedScan();
         }
     }
     

@@ -223,7 +223,7 @@ esp_err_t BLEServer::init() {
     }
     
     if (config_.client_timeout_ms > 0) {
-        xTaskCreate(clientTimeoutTask, "ble_server_timeout", 2048, this, 3, &client_timeout_task_handle_);
+        xTaskCreate(clientTimeoutTask, "ble_server_timeout", 2048*2, this, 3, &client_timeout_task_handle_);
     }
     
     state_ = BLE_SERVER_READY;

@@ -119,6 +119,30 @@ typedef void (*ble_client_device_found_cb_t)(const ble_device_info_t* device_inf
 typedef void (*ble_client_auth_cb_t)(bool success, esp_err_t error_code);
 
 /******************************************************************************/
+/*                           NUEVOS CALLBACKS EXTENDIDOS                     */
+/******************************************************************************/
+
+/**
+ * @brief Callback para cuando cualquier dispositivo BLE es detectado durante el escaneo
+ * @param device_info Información del dispositivo encontrado
+ * @param is_target True si es el dispositivo objetivo, false si es otro dispositivo
+ */
+typedef void (*ble_client_any_device_found_cb_t)(const ble_device_info_t* device_info, bool is_target);
+
+/**
+ * @brief Callback para cuando se inicia un escaneo
+ * @param scan_duration_ms Duración del escaneo en milisegundos
+ */
+typedef void (*ble_client_scan_started_cb_t)(uint32_t scan_duration_ms);
+
+/**
+ * @brief Callback para cuando termina un escaneo
+ * @param devices_found Número total de dispositivos encontrados
+ * @param target_found True si se encontró el dispositivo objetivo
+ */
+typedef void (*ble_client_scan_completed_cb_t)(uint32_t devices_found, bool target_found);
+
+/******************************************************************************/
 /*                                BLE Client Class                            */
 /******************************************************************************/
 
@@ -296,6 +320,82 @@ public:
     void setAuthCallback(ble_client_auth_cb_t callback);
 
     /**************************************************************************/
+    /*                         NUEVOS MÉTODOS EXTENDIDOS                     */
+    /**************************************************************************/
+
+    /**
+     * @brief Registra callback para detectar CUALQUIER dispositivo BLE durante el escaneo
+     * 
+     * Este callback se ejecuta para TODOS los dispositivos BLE detectados,
+     * no solo para el dispositivo objetivo.
+     * 
+     * @param callback Función a llamar cuando se detecte cualquier dispositivo
+     */
+    void setAnyDeviceFoundCallback(ble_client_any_device_found_cb_t callback);
+
+    /**
+     * @brief Registra callback para cuando se inicia un escaneo
+     * 
+     * @param callback Función a llamar cuando inicie un escaneo
+     */
+    void setScanStartedCallback(ble_client_scan_started_cb_t callback);
+
+    /**
+     * @brief Registra callback para cuando termina un escaneo
+     * 
+     * @param callback Función a llamar cuando termine un escaneo
+     */
+    void setScanCompletedCallback(ble_client_scan_completed_cb_t callback);
+
+    /**
+     * @brief Inicia un escaneo en modo "mostrar todos" sin filtro de dispositivo objetivo
+     * 
+     * En este modo, el cliente escaneará y reportará TODOS los dispositivos BLE
+     * encontrados sin intentar conectarse a ninguno.
+     * 
+     * @param duration_ms Duración del escaneo en milisegundos
+     * @return esp_err_t ESP_OK on success, error code otherwise
+     */
+    esp_err_t startDiscoveryScan(uint32_t duration_ms = 15000);
+
+    /**
+     * @brief Inicia un escaneo filtrado buscando solo el dispositivo objetivo
+     * 
+     * Este es el modo normal de escaneo que busca específicamente el dispositivo
+     * configurado en target_device_name.
+     * 
+     * @return esp_err_t ESP_OK on success, error code otherwise
+     */
+    esp_err_t startTargetedScan();
+
+    /**
+     * @brief Establece el modo de escaneo (discovery vs targeted)
+     * 
+     * @param discovery_mode True para modo discovery (mostrar todos), false para modo targeted
+     */
+    void setScanMode(bool discovery_mode);
+
+    /**
+     * @brief Obtiene el número de dispositivos únicos encontrados en la sesión actual
+     * 
+     * @return uint32_t Número de dispositivos únicos detectados
+     */
+    uint32_t getUniqueDevicesFound() const;
+
+    /**
+     * @brief Limpia la lista de dispositivos encontrados
+     */
+    void clearDeviceList();
+
+    /**
+     * @brief Obtiene información de un dispositivo encontrado por índice
+     * 
+     * @param index Índice del dispositivo (0 a getUniqueDevicesFound()-1)
+     * @return ble_device_info_t* Puntero a la info del dispositivo, nullptr si índice inválido
+     */
+    const ble_device_info_t* getFoundDevice(uint32_t index) const;
+
+    /**************************************************************************/
     /*                              Status Methods                            */
     /**************************************************************************/
 
@@ -379,7 +479,7 @@ public:
     bool performHealthCheck();
 
 protected:
-/**************************************************************************/
+    /**************************************************************************/
     /*                              Internal Methods                          */
     /**************************************************************************/
 
@@ -430,8 +530,6 @@ protected:
      */
     static void reconnectTask(void *pvParameters);
 
-    // ✅ AGREGADO: Métodos internos faltantes para manejar eventos
-    
     /**
      * @brief Handles scan result events
      * 
@@ -502,6 +600,26 @@ protected:
      */
     void handleNotification(esp_ble_gattc_cb_param_t *param);
 
+    /**************************************************************************/
+    /*                       NUEVOS MÉTODOS PRIVADOS                         */
+    /**************************************************************************/
+
+    /**
+     * @brief Agrega un dispositivo a la lista de encontrados (si no existe ya)
+     * 
+     * @param device_info Información del dispositivo a agregar
+     * @return bool True si se agregó (nuevo), false si ya existía
+     */
+    bool addToFoundDevices(const ble_device_info_t* device_info);
+
+    /**
+     * @brief Verifica si un dispositivo ya está en la lista de encontrados
+     * 
+     * @param address Dirección MAC del dispositivo
+     * @return bool True si ya está en la lista, false si es nuevo
+     */
+    bool isDeviceAlreadyFound(const esp_bd_addr_t address) const;
+
 private:
     /**************************************************************************/
     /*                              Member Variables                          */
@@ -543,4 +661,24 @@ private:
     
     // Static instance for callbacks
     static BLEClient* instance_;                  ///< Static instance for C callbacks
+
+    /**************************************************************************/
+    /*                       NUEVAS VARIABLES PRIVADAS                       */
+    /**************************************************************************/
+
+    // Callbacks extendidos
+    ble_client_any_device_found_cb_t any_device_found_cb_;     ///< Callback para cualquier dispositivo
+    ble_client_scan_started_cb_t scan_started_cb_;             ///< Callback de inicio de escaneo
+    ble_client_scan_completed_cb_t scan_completed_cb_;         ///< Callback de fin de escaneo
+
+    // Control de modo de escaneo
+    bool discovery_mode_;                                       ///< True para modo discovery, false para targeted
+    uint32_t current_scan_duration_;                          ///< Duración actual del escaneo
+    uint64_t scan_start_time_;                                 ///< Tiempo de inicio del escaneo actual
+
+    // Lista de dispositivos encontrados
+    static const uint32_t MAX_FOUND_DEVICES = 50;
+    ble_device_info_t found_devices_[MAX_FOUND_DEVICES];      ///< Lista de dispositivos encontrados
+    uint32_t found_devices_count_;                            ///< Número de dispositivos únicos encontrados
+    bool target_device_found_in_scan_;                        ///< Flag si se encontró el target en el escaneo actual
 };
