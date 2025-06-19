@@ -168,8 +168,31 @@ esp_err_t BLEClient::init() {
     return ESP_OK;
 }
 
+esp_err_t BLEClient::setMacTarget(const esp_bd_addr_t server_address) {
+    if (server_address == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (xSemaphoreTake(state_mutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    memcpy(config_.target_server_address, server_address, ESP_BD_ADDR_LEN);
+    xSemaphoreGive(state_mutex_);
+
+    // ✅ LOGGING MEJORADO
+    char addr_str[18];
+    ble_addr_to_string((uint8_t*)server_address, addr_str);
+    ble_log(ESP_LOG_INFO, "✓ Target MAC address set to: %s", addr_str);
+    
+    return ESP_OK;
+}
+
 esp_err_t BLEClient::startScan() {
-    ble_log(ESP_LOG_INFO, "Starting BLE scan for target: %s", config_.target_device_name);
+       // ✅ CAMBIO: Mostrar MAC en lugar de target_server_address
+    char mac_str[18];
+    ble_addr_to_string((uint8_t*)config_.target_server_address, mac_str);
+    ble_log(ESP_LOG_INFO, "Starting BLE scan for target MAC: %s", mac_str);
 
     if (state_ == BLE_CLIENT_SCANNING) {
         ble_log(ESP_LOG_WARN, "Already scanning");
@@ -555,7 +578,10 @@ esp_err_t BLEClient::startDiscoveryScan(uint32_t duration_ms) {
 }
 
 esp_err_t BLEClient::startTargetedScan() {
-    ble_log(ESP_LOG_INFO, "Starting targeted scan for: %s", config_.target_device_name);
+    // ✅ CAMBIO PRINCIPAL: Mostrar MAC en lugar de nombre
+    char mac_str[18];
+    ble_addr_to_string((uint8_t*)config_.target_server_address, mac_str);
+    ble_log(ESP_LOG_INFO, "Starting targeted scan for MAC: %s", mac_str);
 
     if (state_ == BLE_CLIENT_SCANNING) {
         ble_log(ESP_LOG_WARN, "Already scanning");
@@ -577,6 +603,12 @@ esp_err_t BLEClient::startTargetedScan() {
     
     xSemaphoreGive(state_mutex_);
 
+    // ✅ Log mejorado con información de MAC
+    ble_log(ESP_LOG_INFO, "Scan configured:");
+    ble_log(ESP_LOG_INFO, "  Target MAC: %s", mac_str);
+    ble_log(ESP_LOG_INFO, "  Duration: %lu ms", config_.scan_timeout_ms);
+    ble_log(ESP_LOG_INFO, "  Min RSSI: %d dBm", config_.min_rssi);
+
     // Llamar callback de inicio
     if (scan_started_cb_ != nullptr) {
         scan_started_cb_(config_.scan_timeout_ms);
@@ -591,6 +623,7 @@ esp_err_t BLEClient::startTargetedScan() {
         return ret;
     }
 
+    ble_log(ESP_LOG_INFO, "🔍 Targeted MAC scan started successfully");
     return ESP_OK;
 }
 
@@ -736,12 +769,13 @@ void BLEClient::gattcCallback(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if
 // Reemplaza la función verifyTargetDevice completa con esta versión corregida:
 
 bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scan_result) {
-    char device_name[BLE_MAX_DEVICE_NAME_LEN] = {0};
     bool has_target_service = false;
-    bool name_match = false;
     
-    // ✅ PRIMERO: Extraer nombre del dispositivo de los datos de advertising
-    if (scan_result->scan_rst.adv_data_len > 0) {
+    // ✅ VERIFICACIÓN PRINCIPAL: Solo comparar MAC address
+    bool mac_match = (memcmp(scan_result->scan_rst.bda, config_.target_server_address, ESP_BD_ADDR_LEN) == 0);
+    
+    // ✅ Verificar servicios UUID si se requiere seguridad
+    if (security_config_.use_custom_uuids && scan_result->scan_rst.adv_data_len > 0) {
         uint8_t *adv_data = scan_result->scan_rst.ble_adv;
         uint8_t adv_data_len = scan_result->scan_rst.adv_data_len;
         
@@ -751,24 +785,10 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scan_result) {
             
             uint8_t type = adv_data[i + 1];
             
-            // Check device name FIRST
-            if (type == 0x09 || type == 0x08) {  // Complete or shortened local name
-                uint8_t name_len = length - 1;
-                if (name_len > BLE_MAX_DEVICE_NAME_LEN - 1) {
-                    name_len = BLE_MAX_DEVICE_NAME_LEN - 1;
-                }
-                memcpy(device_name, &adv_data[i + 2], name_len);
-                device_name[name_len] = '\0';
-                
-                ble_log(ESP_LOG_DEBUG, "Extracted device name: '%s' (len=%d)", device_name, name_len);
-            }
-            // Check service UUIDs
-            else if (security_config_.use_custom_uuids) {
-                if (type == 0x07 && length == 17) {  // Complete list of 128-bit service UUIDs
-                    if (ble_compare_uuid128(&adv_data[i + 2], security_config_.service_uuid)) {
-                        has_target_service = true;
-                        ble_log(ESP_LOG_DEBUG, "Found target service UUID");
-                    }
+            if (type == 0x07 && length == 17) {  // Complete list of 128-bit service UUIDs
+                if (ble_compare_uuid128(&adv_data[i + 2], security_config_.service_uuid)) {
+                    has_target_service = true;
+                    break;
                 }
             }
             
@@ -776,55 +796,45 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scan_result) {
         }
     }
     
-    // SEGUNDO: Debug logging para verificar la extracción
-    ble_log(ESP_LOG_INFO, "=== Device Verification Debug ===");
-    ble_log(ESP_LOG_INFO, "Extracted name: '%s'", device_name);
-    ble_log(ESP_LOG_INFO, "Target name: '%s'", config_.target_device_name);
-    ble_log(ESP_LOG_INFO, "Name length: %d", strlen(device_name));
-    ble_log(ESP_LOG_INFO, "Target length: %d", strlen(config_.target_device_name));
-    ble_log(ESP_LOG_INFO, "RSSI: %d dBm (min: %d)", scan_result->scan_rst.rssi, config_.min_rssi);
-    ble_log(ESP_LOG_INFO, "Security level: %d", security_config_.level);
-    ble_log(ESP_LOG_INFO, "Use custom UUIDs: %s", security_config_.use_custom_uuids ? "YES" : "NO");
+    // ✅ Verificar RSSI
+    bool rssi_ok = (scan_result->scan_rst.rssi >= config_.min_rssi);
     
-    // TERCERO: Verificar name match
-    if (strlen(device_name) > 0) {
-        name_match = (strcmp(device_name, config_.target_device_name) == 0);
-        ble_log(ESP_LOG_INFO, "String comparison result: %s", name_match ? "MATCH" : "NO MATCH");
-    } else {
-        ble_log(ESP_LOG_WARN, "Device name is empty!");
-    }
-
-    // Cuarto: Apply security level verification
+    // ✅ Verificar seguridad
     bool security_ok = false;
     switch (security_config_.level) {
         case BLE_SECURITY_NONE:
             security_ok = true;
-            ble_log(ESP_LOG_DEBUG, "Security: NONE - always OK");
             break;
             
         case BLE_SECURITY_BASIC:
         case BLE_SECURITY_AUTHENTICATED:
         case BLE_SECURITY_ENCRYPTED:
             security_ok = (has_target_service || !security_config_.use_custom_uuids);
-            ble_log(ESP_LOG_DEBUG, "Security: %s - %s", 
-                    security_config_.use_custom_uuids ? "Custom UUIDs" : "Standard UUIDs",
-                    security_ok ? "OK" : "FAIL");
             break;
             
         default:
             security_ok = false;
-            ble_log(ESP_LOG_ERROR, "Unknown security level: %d", security_config_.level);
             break;
     }
     
-    // ✅ QUINTO: Final result
-    bool final_result = name_match && security_ok;
+    // ✅ Resultado final
+    bool final_result = mac_match && rssi_ok && security_ok;
     
-    ble_log(ESP_LOG_INFO, "Verification Summary:");
-    ble_log(ESP_LOG_INFO, "  Name match: %s", name_match ? "✓" : "✗");
+    // ✅ Debug logging simplificado - SOLO MAC
+    char found_mac[18], target_mac[18];
+    ble_addr_to_string(scan_result->scan_rst.bda, found_mac);
+    ble_addr_to_string((uint8_t*)config_.target_server_address, target_mac);
+    
+    ble_log(ESP_LOG_INFO, "=== MAC-Based Device Verification ===");
+    ble_log(ESP_LOG_INFO, "Found MAC: %s", found_mac);
+    ble_log(ESP_LOG_INFO, "Target MAC: %s", target_mac);
+    ble_log(ESP_LOG_INFO, "RSSI: %d dBm (min: %d)", scan_result->scan_rst.rssi, config_.min_rssi);
+    ble_log(ESP_LOG_INFO, "Verification Results:");
+    ble_log(ESP_LOG_INFO, "  MAC match: %s", mac_match ? "✓" : "✗");
+    ble_log(ESP_LOG_INFO, "  RSSI OK: %s", rssi_ok ? "✓" : "✗");
     ble_log(ESP_LOG_INFO, "  Security OK: %s", security_ok ? "✓" : "✗");
     ble_log(ESP_LOG_INFO, "  FINAL RESULT: %s", final_result ? "TARGET VERIFIED ✓" : "NOT TARGET ✗");
-    ble_log(ESP_LOG_INFO, "==============================");
+    ble_log(ESP_LOG_INFO, "====================================");
     
     return final_result;
 }

@@ -56,6 +56,7 @@ typedef enum {
  * @brief Configuration structure for BLE client
  */
 typedef struct {
+    esp_bd_addr_t target_server_address;                ///< MAC address of target server
     char target_device_name[BLE_MAX_DEVICE_NAME_LEN];  ///< Name of target server device
     uint32_t scan_timeout_ms;                          ///< Scan timeout in milliseconds
     int8_t min_rssi;                                   ///< Minimum RSSI to consider for connection
@@ -197,6 +198,15 @@ public:
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
     esp_err_t stopScan();
+
+
+    /**
+     * @brief Sets the target device for scanning
+     * 
+     * @param server_address Name of the target device to search for
+     * @return esp_err_t ESP_OK on success, error code otherwise
+     */
+    esp_err_t setMacTarget(const esp_bd_addr_t server_address);
 
     /**
      * @brief Connects to a specific BLE server

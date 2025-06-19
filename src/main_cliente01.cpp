@@ -3,6 +3,7 @@
 #include "nvs_flash.h"
 
 static const char* TAG = "BLE_EXTENDED_DEMO";
+const esp_bd_addr_t MAC_TARGET = {0x24, 0xEC, 0x4A, 0x36, 0x86, 0x42};
 
 extern "C" void app_main() {
     ESP_LOGI(TAG, "=== Demo BLE Client Extendido ===");
@@ -16,7 +17,7 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(ret);
 
     // Crear cliente BLE
-    BLELibrary* ble = createBLEClient("ExtendedClient", "154_BLE_Server");
+    BLELibrary* ble = createBLEClient("ScannClient", "154_BLE_Server");
     if (ble == nullptr) {
         ESP_LOGE(TAG, "Error creando cliente BLE");
         return;
@@ -29,23 +30,23 @@ extern "C" void app_main() {
         config.min_rssi = -90; // Ajustar RSSI mínimo
         // config.
         client->setConfig(config);
-
+        client->setMacTarget(MAC_TARGET);
 
         // NUEVO: Callback para CUALQUIER dispositivo encontrado
         client->setAnyDeviceFoundCallback([](const ble_device_info_t* device_info, bool is_target) {
-            ESP_LOGI(TAG, " DISPOSITIVO DETECTADO:");
-            ESP_LOGI(TAG, "   Nombre: %s", device_info->name);
+            ESP_LOGI(TAG, " Device detected:");
+            ESP_LOGI(TAG, "   Name: %s", device_info->name);
             ESP_LOGI(TAG, "  MAC: %02x:%02x:%02x:%02x:%02x:%02x", 
                      device_info->address[0], device_info->address[1], device_info->address[2],
                      device_info->address[3], device_info->address[4], device_info->address[5]);
-            ESP_LOGI(TAG, "   RSSI: %d dBm (Calidad: %d%%)", device_info->rssi, ble_rssi_to_quality(device_info->rssi));
-            ESP_LOGI(TAG, "   Es target: %s", is_target ? "SÍ" : "NO");
+            ESP_LOGI(TAG, "   RSSI: %d dBm", device_info->rssi);
+            ESP_LOGI(TAG, "   target: %s", is_target ? "yes" : "no");
             ESP_LOGI(TAG, "  ────────────────────────────");
         });
 
         // NUEVO: Callback cuando inicia escaneo
         client->setScanStartedCallback([](uint32_t scan_duration_ms) {
-            ESP_LOGI(TAG, "🔍 ESCANEO INICIADO - Duración: %lu ms", scan_duration_ms);
+            ESP_LOGI(TAG, "🔍 Init Scan - time duration: %lu ms", scan_duration_ms);
         });
 
         // NUEVO: Callback cuando termina escaneo

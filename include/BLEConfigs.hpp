@@ -161,7 +161,7 @@ extern const uint8_t BLE_DEFAULT_CUSTOM_CHAR_UUID_128[BLE_UUID_128_LEN];
 /**
  * @brief Default authentication key
  */
-#define BLE_DEFAULT_AUTH_KEY "MySecretKey123"
+#define BLE_DEFAULT_AUTH_KEY "15453n53"
 
 /******************************************************************************/
 /*                                Common Functions                            */
