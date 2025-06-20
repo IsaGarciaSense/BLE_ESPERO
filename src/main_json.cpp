@@ -19,7 +19,7 @@
 #define PROFILE_NUM                 1
 #define PROFILE_APP_IDX             0
 #define ESP_APP_ID                  0x55
-#define SAMPLE_DEVICE_NAME          "ESP32_JSON_SERVER"
+#define SAMPLE_DEVICE_NAME          "154_JSON_SERVER"
 #define SVC_INST_ID                 0
 
 /* Configuración de UUIDs personalizados */
@@ -46,6 +46,7 @@ static prepare_type_env_t prepare_write_env;
 
 /* UUIDs personalizados convertidos a formato ESP32 */
 // SERVICE_UUID "cf2c5f7c-933a-4e1a-af85-46a83108b992"
+
 static uint8_t service_uuid[16] = {
     0x92, 0xb9, 0x08, 0x31, 0xa8, 0x46, 0x85, 0xaf, 0x1a, 0x4e, 0x3a, 0x93, 0x7c, 0x5f, 0x2c, 0xcf
 };
@@ -214,44 +215,24 @@ void process_json_data(const char* json_string) {
         return;
     }
     
-    // Ejemplo: extraer campos del JSON
-    cJSON *name = cJSON_GetObjectItem(json, "name");
-    cJSON *value = cJSON_GetObjectItem(json, "value");
-    cJSON *timestamp = cJSON_GetObjectItem(json, "timestamp");
-    cJSON *command = cJSON_GetObjectItem(json, "command");
+    cJSON *ssid = cJSON_GetObjectItem(json, "ssid");
+    cJSON *password = cJSON_GetObjectItem(json, "password");
     
     // Crear respuesta JSON
     cJSON *response = cJSON_CreateObject();
     cJSON *status = cJSON_CreateString("success");
     cJSON_AddItemToObject(response, "status", status);
     
-    if (cJSON_IsString(name) && (name->valuestring != NULL)) {
-        ESP_LOGI(GATTS_TABLE_TAG, "Nombre: %s", name->valuestring);
-        cJSON_AddStringToObject(response, "received_name", name->valuestring);
+    if (cJSON_IsString(ssid) && (ssid->valuestring != NULL)) {
+        ESP_LOGI(GATTS_TABLE_TAG, "ssid: %s", ssid->valuestring);
+        cJSON_AddStringToObject(response, "receid_ssid", ssid->valuestring);
     }
     
-    if (cJSON_IsNumber(value)) {
-        ESP_LOGI(GATTS_TABLE_TAG, "Valor: %f", value->valuedouble);
-        cJSON_AddNumberToObject(response, "received_value", value->valuedouble);
+    if (cJSON_IsNumber(password)) {
+        ESP_LOGI(GATTS_TABLE_TAG, "Password: %f", password->valuedouble);
+        cJSON_AddNumberToObject(response, "received_Password", password->valuedouble);
     }
-    
-    if (cJSON_IsNumber(timestamp)) {
-        ESP_LOGI(GATTS_TABLE_TAG, "Timestamp: %ld", (long)timestamp->valuedouble);
-        cJSON_AddNumberToObject(response, "received_timestamp", timestamp->valuedouble);
-    }
-    
-    if (cJSON_IsString(command) && (command->valuestring != NULL)) {
-        ESP_LOGI(GATTS_TABLE_TAG, "Comando: %s", command->valuestring);
-        
-        // Procesar comandos específicos
-        if (strcmp(command->valuestring, "get_status") == 0) {
-            cJSON_AddStringToObject(response, "device_status", "online");
-            cJSON_AddNumberToObject(response, "uptime", (double)(esp_timer_get_time() / 1000000));
-        } else if (strcmp(command->valuestring, "reset") == 0) {
-            cJSON_AddStringToObject(response, "action", "reset_scheduled");
-            // Aquí podrías programar un reset
-        }
-    }
+
     
     // Convertir respuesta a string y enviar
     char *response_string = cJSON_Print(response);
@@ -259,9 +240,18 @@ void process_json_data(const char* json_string) {
         send_json_response(response_string);
         free(response_string);
     }
-    
-    // Aquí puedes agregar tu lógica de procesamiento personalizada
-    // Por ejemplo, guardar en NVS, controlar GPIO, etc.
+    //guardando en nvs
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+    if (err == ESP_OK) {
+        nvs_set_str(nvs_handle, "ssid", ssid->valuestring);
+        nvs_set_str(nvs_handle, "password", cJSON_Print(password));
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+        ESP_LOGI(GATTS_TABLE_TAG, "Data saved in NVS");
+    } else {
+        ESP_LOGE(GATTS_TABLE_TAG, "Error with NVS: %s", esp_err_to_name(err));
+    }
     
     cJSON_Delete(json);
     cJSON_Delete(response);
@@ -573,6 +563,7 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
