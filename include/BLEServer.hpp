@@ -1,10 +1,10 @@
 /*******************************************************************************
  * @file BLEServer.hpp
  * @brief Contains declarations for BLE server functionality including advertising,
- * client management, and service provisioning.
+ * client management, service provisioning, and JSON command processing.
  *
- * @version 0.0.1
- * @date 2025-06-15
+ * @version 0.0.2
+ * @date 2025-06-19
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -41,6 +41,7 @@ typedef enum {
     BLE_SERVER_EVENT_CLIENT_AUTHENTICATED,  ///< Client authenticated
     BLE_SERVER_EVENT_DATA_WRITTEN,         ///< Data written by client
     BLE_SERVER_EVENT_DATA_READ,            ///< Data read by client
+    BLE_SERVER_EVENT_JSON_COMMAND,         ///< JSON command received
     BLE_SERVER_EVENT_ERROR                 ///< Error occurred
 } ble_server_event_t;
 
@@ -62,6 +63,8 @@ typedef struct {
     uint32_t client_timeout_ms;                   ///< Client inactivity timeout
     bool require_authentication;                   ///< Require client authentication
     bool enable_notifications;                     ///< Enable data notifications to clients
+    bool enable_json_commands;                     ///< Enable JSON command processing
+    uint32_t max_json_size;                       ///< Maximum JSON command size
 } ble_server_config_t;
 
 /**
@@ -77,6 +80,8 @@ typedef struct {
     uint32_t data_packets_sent;                   ///< Data packets sent to this client
     uint32_t data_packets_received;               ///< Data packets received from this client
     bool notifications_enabled;                   ///< Notifications enabled for this client
+    char json_buffer[512];                        ///< Buffer for accumulating JSON data
+    uint16_t json_buffer_pos;                     ///< Current position in JSON buffer
 } ble_client_session_t;
 
 /**
@@ -91,6 +96,8 @@ typedef struct {
     uint32_t failed_authentications;             ///< Failed authentication attempts
     uint32_t data_packets_sent;                   ///< Total data packets sent
     uint32_t data_packets_received;               ///< Total data packets received
+    uint32_t json_commands_processed;             ///< JSON commands processed
+    uint32_t json_commands_failed;                ///< Failed JSON commands
     uint64_t total_uptime_ms;                     ///< Total server uptime
     uint64_t start_time;                          ///< Server start timestamp
 } ble_server_stats_t;
@@ -106,7 +113,18 @@ typedef struct {
     uint8_t connected_clients;                    ///< Number of connected clients
     bool advertising_active;                      ///< Advertising status
     uint64_t last_update_time;                    ///< Last data update timestamp
+    bool json_processing_enabled;                 ///< JSON processing status
 } ble_server_status_t;
+
+/**
+ * @struct ble_json_command_t
+ * @brief Structure for JSON command data
+ */
+typedef struct {
+    uint16_t conn_id;                            ///< Connection ID that sent the command
+    char command_json[512];                      ///< JSON command string
+    uint64_t timestamp;                          ///< Command timestamp
+} ble_json_command_t;
 
 /******************************************************************************/
 /*                                 Callbacks                                  */
@@ -156,6 +174,13 @@ typedef void (*ble_server_client_auth_cb_t)(uint16_t conn_id, bool success, cons
  */
 typedef void (*ble_server_advertising_cb_t)(bool started, esp_err_t error_code);
 
+/**
+ * @brief Callback for JSON command processing
+ * @param command Pointer to the JSON command structure
+ * @return True if command was processed successfully
+ */
+typedef bool (*ble_server_json_command_cb_t)(const ble_json_command_t* command);
+
 /******************************************************************************/
 /*                                BLE Server Class                           */
 /******************************************************************************/
@@ -165,8 +190,9 @@ typedef void (*ble_server_advertising_cb_t)(bool started, esp_err_t error_code);
  * 
  * This class provides a high-level interface for BLE server operations including
  * advertising services, managing client connections, handling authentication,
- * and serving data to connected clients. It supports multiple simultaneous
- * clients, automatic data updates, and comprehensive statistics tracking.
+ * serving data to connected clients, and processing JSON commands. It supports 
+ * multiple simultaneous clients, automatic data updates, and comprehensive 
+ * statistics tracking.
  */
 class BLEServer {
 public:
@@ -227,6 +253,23 @@ public:
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
     esp_err_t setCustomData(const char* data);
+
+    /**
+     * @brief Sends a JSON response to a specific client
+     * 
+     * @param conn_id Connection ID of the target client
+     * @param json_response JSON response string
+     * @return esp_err_t ESP_OK on success, error code otherwise
+     */
+    esp_err_t sendJsonResponse(uint16_t conn_id, const char* json_response);
+
+    /**
+     * @brief Sends a JSON response to all connected clients
+     * 
+     * @param json_response JSON response string
+     * @return esp_err_t ESP_OK on success, error code otherwise
+     */
+    esp_err_t sendJsonResponseToAll(const char* json_response);
 
     /**
      * @brief Sends notifications to all connected clients
@@ -342,6 +385,13 @@ public:
      * @param callback Function to call for advertising events
      */
     void setAdvertisingCallback(ble_server_advertising_cb_t callback);
+
+    /**
+     * @brief Registers callback for JSON command processing
+     * 
+     * @param callback Function to call for JSON commands
+     */
+    void setJsonCommandCallback(ble_server_json_command_cb_t callback);
 
     /**************************************************************************/
     /*                              Status Methods                            */
@@ -503,6 +553,23 @@ protected:
     esp_err_t removeClientSession(uint16_t conn_id);
 
     /**
+     * @brief Processes JSON data received from a client
+     * 
+     * @param conn_id Connection ID of the client
+     * @param data JSON data received
+     * @param length Length of the data
+     */
+    void processJsonData(uint16_t conn_id, const uint8_t* data, uint16_t length);
+
+    /**
+     * @brief Processes a complete JSON command
+     * 
+     * @param conn_id Connection ID of the client
+     * @param json_string Complete JSON command string
+     */
+    void processJsonCommand(uint16_t conn_id, const char* json_string);
+
+    /**
      * @brief Internal task for automatic data updates
      * 
      * @param pvParameters Task parameters
@@ -547,6 +614,7 @@ private:
     ble_server_data_read_cb_t data_read_cb_;                   ///< Data read callback
     ble_server_client_auth_cb_t client_auth_cb_;               ///< Client authentication callback
     ble_server_advertising_cb_t advertising_cb_;               ///< Advertising callback
+    ble_server_json_command_cb_t json_command_cb_;             ///< JSON command callback
     
     // Task handles
     TaskHandle_t data_update_task_handle_;        ///< Data update task handle

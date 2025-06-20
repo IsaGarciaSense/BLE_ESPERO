@@ -1,15 +1,16 @@
 /*******************************************************************************
  * @file BLEServer.cpp
  * @brief Implementation of BLE server functionality including advertising,
- * client management, and service provisioning.
+ * client management, service provisioning, and JSON command processing.
  *
- * @version 0.0.1
- * @date 2025-06-15
+ * @version 0.0.2
+ * @date 2025-06-19
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
 
 #include "BLEServer.hpp"
+#include <cJSON.h>
 
 /******************************************************************************/
 /*                               Static Variables                             */
@@ -37,8 +38,8 @@ static esp_ble_adv_data_t adv_data_ = {
 
 // Advertising parameters
 static esp_ble_adv_params_t adv_params_ = {
-    .adv_int_min = 0x20,
-    .adv_int_max = 0x40,
+    .adv_int_min = 0x60, // 60 ms
+    .adv_int_max = 0x80, // 80 ms
     .adv_type = ADV_TYPE_IND,
     .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
     .peer_addr = {0},
@@ -60,7 +61,9 @@ static const ble_server_config_t default_server_config = {
     .max_clients = 4,
     .client_timeout_ms = 30000,
     .require_authentication = false,
-    .enable_notifications = true
+    .enable_notifications = true,
+    .enable_json_commands = true,
+    .max_json_size = 512
 };
 
 /******************************************************************************/
@@ -86,6 +89,7 @@ BLEServer::BLEServer(const ble_server_config_t& config) :
     data_read_cb_(nullptr),
     client_auth_cb_(nullptr),
     advertising_cb_(nullptr),
+    json_command_cb_(nullptr),
     data_update_task_handle_(nullptr),
     client_timeout_task_handle_(nullptr),
     clients_mutex_(nullptr),
@@ -102,6 +106,7 @@ BLEServer::BLEServer(const ble_server_config_t& config) :
     memset(&status_, 0, sizeof(status_));
     status_.state = state_;
     status_.battery_level = battery_level_;
+    status_.json_processing_enabled = config_.enable_json_commands;
     strcpy(status_.custom_data, "Hello from ESP32!");
     
     // Initialize statistics
@@ -115,6 +120,7 @@ BLEServer::BLEServer(const ble_server_config_t& config) :
     ble_create_default_security_config(&security_config_, BLE_SECURITY_BASIC);
     
     ESP_LOGI(TAG, "BLEServer created with device name: %s", config_.device_name);
+    ESP_LOGI(TAG, "JSON commands: %s", config_.enable_json_commands ? "ENABLED" : "DISABLED");
 }
 
 BLEServer::~BLEServer() {
@@ -217,13 +223,13 @@ esp_err_t BLEServer::init() {
     // Update advertising interval
     setAdvertisingInterval(config_.advertising_interval_ms);
     
-    // Start tasks
+    // Start tasks only if intervals are set
     if (config_.data_update_interval_ms > 0) {
         xTaskCreate(dataUpdateTask, "ble_server_data", 4096, this, 5, &data_update_task_handle_);
     }
     
     if (config_.client_timeout_ms > 0) {
-        xTaskCreate(clientTimeoutTask, "ble_server_timeout", 2048*2, this, 3, &client_timeout_task_handle_);
+        xTaskCreate(clientTimeoutTask, "ble_server_timeout", 4096, this, 3, &client_timeout_task_handle_);
     }
     
     state_ = BLE_SERVER_READY;
@@ -360,6 +366,71 @@ esp_err_t BLEServer::setCustomData(const char* data) {
     return ESP_ERR_TIMEOUT;
 }
 
+/******************************************************************************/
+/*                              JSON Response Methods                         */
+/******************************************************************************/
+
+esp_err_t BLEServer::sendJsonResponse(uint16_t conn_id, const char* json_response) {
+    if (!json_response) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    size_t json_len = strlen(json_response);
+    const size_t chunk_size = 200; // Conservative size for BLE
+    
+    ESP_LOGI(TAG, "📤 Sending JSON response to client %d (%zu bytes)", conn_id, json_len);
+    ESP_LOGD(TAG, "JSON: %s", json_response);
+    
+    if (json_len <= chunk_size) {
+        // Send in one piece if small enough
+        esp_err_t ret = esp_ble_gatts_send_indicate(gatts_if_, conn_id, custom_char_handle_,
+                                                   json_len, (uint8_t*)json_response, false);
+        if (ret == ESP_OK) {
+            stats_.data_packets_sent++;
+        }
+        return ret;
+    } else {
+        // Send in chunks
+        esp_err_t result = ESP_OK;
+        for (size_t i = 0; i < json_len; i += chunk_size) {
+            size_t copy_len = (json_len - i < chunk_size) ? json_len - i : chunk_size;
+            
+            esp_err_t ret = esp_ble_gatts_send_indicate(gatts_if_, conn_id, custom_char_handle_,
+                                                       copy_len, (uint8_t*)(json_response + i), false);
+            if (ret == ESP_OK) {
+                stats_.data_packets_sent++;
+                vTaskDelay(pdMS_TO_TICKS(50)); // Small delay between chunks
+            } else {
+                result = ret;
+                break;
+            }
+        }
+        return result;
+    }
+}
+
+esp_err_t BLEServer::sendJsonResponseToAll(const char* json_response) {
+    if (!json_response) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    esp_err_t result = ESP_OK;
+    
+    if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        for (int i = 0; i < max_clients_; i++) {
+            if (client_sessions_[i].conn_id != 0) {
+                esp_err_t ret = sendJsonResponse(client_sessions_[i].conn_id, json_response);
+                if (ret != ESP_OK) {
+                    result = ret;
+                }
+            }
+        }
+        xSemaphoreGive(clients_mutex_);
+    }
+    
+    return result;
+}
+
 esp_err_t BLEServer::notifyAllClients() {
     esp_err_t result = ESP_OK;
     
@@ -427,6 +498,85 @@ esp_err_t BLEServer::notifyClient(uint16_t conn_id, const char* characteristic_t
 }
 
 /******************************************************************************/
+/*                              JSON Processing Methods                       */
+/******************************************************************************/
+
+void BLEServer::processJsonData(uint16_t conn_id, const uint8_t* data, uint16_t length) {
+    if (!config_.enable_json_commands || !data || length == 0) {
+        return;
+    }
+    
+    // Find client session
+    ble_client_session_t* session = nullptr;
+    if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (int i = 0; i < max_clients_; i++) {
+            if (client_sessions_[i].conn_id == conn_id) {
+                session = &client_sessions_[i];
+                break;
+            }
+        }
+        xSemaphoreGive(clients_mutex_);
+    }
+    
+    if (!session) {
+        ESP_LOGW(TAG, "Session not found for client %d", conn_id);
+        return;
+    }
+    
+    // Accumulate data in client's JSON buffer
+    for (uint16_t i = 0; i < length; i++) {
+        if (session->json_buffer_pos < sizeof(session->json_buffer) - 1) {
+            session->json_buffer[session->json_buffer_pos++] = data[i];
+            
+            // Check for complete JSON (look for closing brace)
+            if (data[i] == '}') {
+                session->json_buffer[session->json_buffer_pos] = '\0';
+                
+                // Process the complete JSON command
+                processJsonCommand(conn_id, session->json_buffer);
+                
+                // Reset buffer
+                session->json_buffer_pos = 0;
+                memset(session->json_buffer, 0, sizeof(session->json_buffer));
+            }
+        } else {
+            // Buffer overflow, reset
+            ESP_LOGW(TAG, "JSON buffer overflow for client %d", conn_id);
+            session->json_buffer_pos = 0;
+            memset(session->json_buffer, 0, sizeof(session->json_buffer));
+        }
+    }
+}
+
+void BLEServer::processJsonCommand(uint16_t conn_id, const char* json_string) {
+    if (!json_string) {
+        return;
+    }
+    
+    ESP_LOGI(TAG, "📥 Processing JSON command from client %d: %s", conn_id, json_string);
+    
+    stats_.json_commands_processed++;
+    
+    // Call user callback if registered
+    if (json_command_cb_) {
+        ble_json_command_t command;
+        command.conn_id = conn_id;
+        strncpy(command.command_json, json_string, sizeof(command.command_json) - 1);
+        command.command_json[sizeof(command.command_json) - 1] = '\0';
+        command.timestamp = ble_get_timestamp();
+        
+        bool handled = json_command_cb_(&command);
+        if (!handled) {
+            ESP_LOGW(TAG, "JSON command not handled by user callback");
+            stats_.json_commands_failed++;
+        }
+    } else {
+        ESP_LOGW(TAG, "No JSON command callback registered");
+        stats_.json_commands_failed++;
+    }
+}
+
+/******************************************************************************/
 /*                              Client Management                             */
 /******************************************************************************/
 
@@ -472,6 +622,8 @@ esp_err_t BLEServer::addClientSession(uint16_t conn_id, const esp_bd_addr_t clie
                 client_sessions_[i].data_packets_sent = 0;
                 client_sessions_[i].data_packets_received = 0;
                 client_sessions_[i].notifications_enabled = config_.enable_notifications;
+                client_sessions_[i].json_buffer_pos = 0;
+                memset(client_sessions_[i].json_buffer, 0, sizeof(client_sessions_[i].json_buffer));
                 
                 status_.connected_clients++;
                 stats_.total_connections++;
@@ -531,8 +683,10 @@ esp_err_t BLEServer::removeClientSession(uint16_t conn_id) {
 esp_err_t BLEServer::setConfig(const ble_server_config_t& config) {
     config_ = config;
     max_clients_ = config.max_clients;
+    status_.json_processing_enabled = config.enable_json_commands;
     
     ESP_LOGI(TAG, "Configuration updated");
+    ESP_LOGI(TAG, "JSON commands: %s", config_.enable_json_commands ? "ENABLED" : "DISABLED");
     return ESP_OK;
 }
 
@@ -596,6 +750,11 @@ void BLEServer::setClientAuthCallback(ble_server_client_auth_cb_t callback) {
 
 void BLEServer::setAdvertisingCallback(ble_server_advertising_cb_t callback) {
     advertising_cb_ = callback;
+}
+
+void BLEServer::setJsonCommandCallback(ble_server_json_command_cb_t callback) {
+    json_command_cb_ = callback;
+    ESP_LOGI(TAG, "JSON command callback %s", callback ? "registered" : "unregistered");
 }
 
 /******************************************************************************/
@@ -709,7 +868,9 @@ bool BLEServer::performHealthCheck() {
         healthy = false;
     }
     
-    ESP_LOGI(TAG, "Health check: %s", healthy ? "PASS" : "FAIL");
+    ESP_LOGI(TAG, "Health check: %s (JSON commands: %s)", 
+             healthy ? "PASS" : "FAIL",
+             config_.enable_json_commands ? "ON" : "OFF");
     return healthy;
 }
 
@@ -741,6 +902,9 @@ esp_err_t BLEServer::generateStatusReport(char* buffer, size_t buffer_size) cons
         "Total Connections: %ld\n"
         "Data Packets Sent: %ld\n"
         "Data Packets Received: %ld\n"
+        "JSON Commands Processed: %ld\n"
+        "JSON Commands Failed: %ld\n"
+        "JSON Processing: %s\n"
         "Free Heap: %ld bytes\n",
         getStateString(),
         config_.device_name,
@@ -752,6 +916,9 @@ esp_err_t BLEServer::generateStatusReport(char* buffer, size_t buffer_size) cons
         stats.total_connections,
         stats.data_packets_sent,
         stats.data_packets_received,
+        stats.json_commands_processed,
+        stats.json_commands_failed,
+        config_.enable_json_commands ? "ENABLED" : "DISABLED",
         esp_get_free_heap_size()
     );
     
@@ -1002,8 +1169,14 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             instance_->status_.state = instance_->state_;
             
             // Stop advertising if we reached max clients
-            if (instance_->status_.connected_clients >= instance_->max_clients_) {
-                instance_->stopAdvertising();
+            // if (instance_->status_.connected_clients >= instance_->max_clients_) {
+            //     instance_->stopAdvertising();
+            // }
+
+            // Mantener advertising activo para permitir más conexiones
+            if (!instance_->isAdvertising()) {
+                ESP_LOGI(TAG, "Reactivating advertising to allow more connections");
+                instance_->startAdvertising();
             }
             
             // Call user callback
@@ -1031,9 +1204,17 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                 instance_->client_disconnected_cb_(param->disconnect.conn_id, param->disconnect.reason);
             }
             
-            // Restart advertising if no clients connected and auto-advertising enabled
-            if (instance_->status_.connected_clients == 0 && instance_->config_.auto_start_advertising) {
+            // Siempre asegurar que advertising está activo después de desconexión
+            if (!instance_->isAdvertising()) {
+                ESP_LOGI(TAG, "Restarting advertising after client disconnection");
                 instance_->startAdvertising();
+            }
+
+            // Restart advertising si auto-advertising está habilitado (sin importar clientes)
+            if (instance_->config_.auto_start_advertising) {
+                if (!instance_->isAdvertising()) {
+                    instance_->startAdvertising();
+                }
             }
             break;
             
@@ -1081,15 +1262,21 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                     param->write.conn_id, param->write.handle, param->write.len);
             
             if (param->write.handle == instance_->custom_char_handle_) {
-                // Update custom data from client write
-                char new_data[BLE_MAX_CUSTOM_DATA_LEN];
-                size_t copy_len = (param->write.len < BLE_MAX_CUSTOM_DATA_LEN - 1) ? 
-                                 param->write.len : BLE_MAX_CUSTOM_DATA_LEN - 1;
+                // Process JSON data if enabled
+                if (instance_->config_.enable_json_commands) {
+                    instance_->processJsonData(param->write.conn_id, param->write.value, param->write.len);
+                } else {
+                    // Update custom data from client write (legacy mode)
+                    char new_data[BLE_MAX_CUSTOM_DATA_LEN];
+                    size_t copy_len = (param->write.len < BLE_MAX_CUSTOM_DATA_LEN - 1) ? 
+                                     param->write.len : BLE_MAX_CUSTOM_DATA_LEN - 1;
+                    
+                    memcpy(new_data, param->write.value, copy_len);
+                    new_data[copy_len] = '\0';
+                    
+                    instance_->setCustomData(new_data);
+                }
                 
-                memcpy(new_data, param->write.value, copy_len);
-                new_data[copy_len] = '\0';
-                
-                instance_->setCustomData(new_data);
                 instance_->stats_.data_packets_received++;
                 
                 if (instance_->data_written_cb_) {
