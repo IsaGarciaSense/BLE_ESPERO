@@ -46,77 +46,63 @@ extern "C" void app_main() {
 
         // NUEVO: Callback cuando inicia escaneo
         client->setScanStartedCallback([](uint32_t scan_duration_ms) {
-            ESP_LOGI(TAG, "🔍 Init Scan - time duration: %lu ms", scan_duration_ms);
+            ESP_LOGI(TAG, "Init Scan - time duration: %lu ms", scan_duration_ms);
         });
 
         // NUEVO: Callback cuando termina escaneo
         client->setScanCompletedCallback([](uint32_t devices_found, bool target_found) {
             ESP_LOGI(TAG, "");
-            ESP_LOGI(TAG, " ESCANEO COMPLETADO");
-            ESP_LOGI(TAG, "   Dispositivos únicos encontrados: %lu", devices_found);
-            ESP_LOGI(TAG, "   Target '154_BLE_Server' encontrado: %s", target_found ? " SÍ" : " NO");
+            ESP_LOGI(TAG, " Scann completed");
+            ESP_LOGI(TAG, "   Founds Device: %lu", devices_found);
+            ESP_LOGI(TAG, "   Is Target '154_BLE_Server': %s", target_found ? " yes" : " no");
             ESP_LOGI(TAG, "════════════════════════════");
             ESP_LOGI(TAG, "");
         });
-
-        // Callbacks tradicionales
-        client->setConnectedCallback([](const ble_device_info_t* device_info) {
-            ESP_LOGI(TAG, "🔗 CONECTADO al servidor: %s", device_info->name);
-        });
-
-        client->setDataReceivedCallback([](const ble_data_packet_t* data) {
-            ESP_LOGI(TAG, "📊 DATOS: Batería=%d%%, Data=%s", data->battery_level, data->custom_data);
-        });
     }
-
-    ESP_LOGI(TAG, "🚀 Cliente BLE extendido listo");
-    ESP_LOGI(TAG, "📡 Objetivo: 154_BLE_Server");
-    ESP_LOGI(TAG, "========================");
 
     // Demo de las nuevas funcionalidades
     uint32_t demo_step = 1;
     
     while (true) {
         ESP_LOGI(TAG, "");
-        ESP_LOGI(TAG, "🎯 === DEMO PASO %lu ===", demo_step);
+        ESP_LOGI(TAG, "=== DEMO PASO %lu ===", demo_step);
         
         switch (demo_step) {
             case 1:
-                ESP_LOGI(TAG, "🔍 Paso 1: Escaneo de descubrimiento (TODOS los dispositivos BLE)");
+                ESP_LOGI(TAG, "All ble devices");
                 client->startDiscoveryScan(15000); // 15 segundos
                 vTaskDelay(pdMS_TO_TICKS(17000)); // Esperar a que termine
                 
                 // Mostrar lista de dispositivos encontrados
                 ESP_LOGI(TAG, "");
-                ESP_LOGI(TAG, "📋 RESUMEN DE DISPOSITIVOS ENCONTRADOS:");
+                ESP_LOGI(TAG, "Devices founds:");
                 for (uint32_t i = 0; i < client->getUniqueDevicesFound(); i++) {
                     const ble_device_info_t* device = client->getFoundDevice(i);
                     if (device != nullptr) {
                         ESP_LOGI(TAG, "  %lu. %s (RSSI: %d dBm)", i+1, device->name, device->rssi);
                     }
                 }
-                ESP_LOGI(TAG, "Total: %lu dispositivos únicos", client->getUniqueDevicesFound());
+                ESP_LOGI(TAG, "Total: %lu unique devices", client->getUniqueDevicesFound());
                 break;
 
             case 2:
-                ESP_LOGI(TAG, "🎯 Paso 2: Escaneo dirigido (solo buscar: 154_BLE_Server)");
+                ESP_LOGI(TAG, "Scann for a specific target (154_BLE_Server)");
                 client->startTargetedScan();
                 vTaskDelay(pdMS_TO_TICKS(20000)); // Esperar conexión o timeout
                 break;
 
             case 3:
-                ESP_LOGI(TAG, "🔄 Paso 3: Otro escaneo de descubrimiento después de limpiar lista");
+                ESP_LOGI(TAG, "🔄 Second round for scanning devices");
                 client->clearDeviceList(); // Limpiar lista anterior
-                ESP_LOGI(TAG, "🧹 Lista limpiada. Reescaneando...");
                 client->startDiscoveryScan(12000); // 12 segundos
                 vTaskDelay(pdMS_TO_TICKS(14000));
                 
-                ESP_LOGI(TAG, "📊 RESUMEN FINAL:");
-                ESP_LOGI(TAG, "  Dispositivos únicos después de limpiar: %lu", client->getUniqueDevicesFound());
+                ESP_LOGI(TAG, "📊 You got:");
+                ESP_LOGI(TAG, "  Devices unique after cleaning: %lu", client->getUniqueDevicesFound());
                 break;
 
             default:
-                ESP_LOGI(TAG, "🔁 Reiniciando demo...");
+                ESP_LOGI(TAG, "🔁 Restart demo...");
                 demo_step = 0;
                 vTaskDelay(pdMS_TO_TICKS(5000));
                 break;
