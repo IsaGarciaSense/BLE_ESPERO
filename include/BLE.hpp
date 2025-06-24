@@ -3,7 +3,7 @@
  * @brief Main header file for the BLE library providing unified interface
  * for both client and server functionality with flexible operating modes.
  *
- * @version 0.0.1
+ * @version 0.0.5
  * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************
@@ -14,10 +14,6 @@
 #include "BLEConfigs.hpp"
 #include "BLEClient.hpp"
 #include "BLEServer.hpp"
-
-/******************************************************************************/
-/*                                 Structures                                 */
-/******************************************************************************/
 
 /**
  * @struct ble_library_config_t
@@ -49,10 +45,6 @@ typedef struct {
     char versionString[32];                          ///< Library version string
 } ble_library_status_t;
 
-/******************************************************************************/
-/*                                BLE Library Class                          */
-/******************************************************************************/
-
 /**
  * @brief Main BLE Library class providing unified interface for BLE operations
  * 
@@ -78,10 +70,6 @@ public:
      * @brief Destroys the BLELibrary object and cleans up all resources
      */
     virtual ~BLELibrary();
-
-    /**************************************************************************/
-    /*                              Core Methods                              */
-    /**************************************************************************/
 
     /**
      * @brief Initializes the BLE library with current configuration
@@ -130,10 +118,6 @@ public:
      */
     esp_err_t restart();
 
-    /**************************************************************************/
-    /*                           Configuration Methods                        */
-    /**************************************************************************/
-
     /**
      * @brief Sets the library configuration
      * 
@@ -175,10 +159,6 @@ public:
      */
     esp_err_t setSecurityConfig(const ble_security_config_t& securityConfig);
 
-    /**************************************************************************/
-    /*                            Client Interface                            */
-    /**************************************************************************/
-
     /**
      * @brief Gets the BLE client instance
      * 
@@ -209,10 +189,6 @@ public:
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
     esp_err_t connectToServer(const esp_bd_addr_t serverMACadd);
-
-    /**************************************************************************/
-    /*                            Server Interface                            */
-    /**************************************************************************/
 
     /**
      * @brief Gets the BLE server instance
@@ -245,10 +221,6 @@ public:
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
     esp_err_t updateServerData(uint8_t batteryLevel, const char* customData);
-
-    /**************************************************************************/
-    /*                              Status Methods                            */
-    /**************************************************************************/
 
     /**
      * @brief Gets the current library state
@@ -305,10 +277,6 @@ public:
      * @return esp_err_t Last error code
      */
     esp_err_t getLastError() const;
-
-    /**************************************************************************/
-    /*                              Utility Methods                           */
-    /**************************************************************************/
 
     /**
      * @brief Gets library version information
@@ -368,10 +336,6 @@ public:
      */
     void resetAllStats();
 
-    /**************************************************************************/
-    /*                              Event Methods                             */
-    /**************************************************************************/
-
     /**
      * @brief Sets global event callback for library events
      * 
@@ -385,10 +349,6 @@ public:
      * @param callback Function to call for log messages
      */
     void setLogCallback(ble_log_callback_t callback);
-
-    /**************************************************************************/
-    /*                              Static Utilities                          */
-    /**************************************************************************/
 
     /**
      * @brief Creates a default library configuration
@@ -424,10 +384,6 @@ public:
     static const char* getStateString(ble_state_t state);
 
 protected:
-    /**************************************************************************/
-    /*                              Internal Methods                          */
-    /**************************************************************************/
-
     /**
      * @brief Initializes the client module
      * 
@@ -480,9 +436,6 @@ protected:
     void handleServerEvent(int eventType, void* eventData);
 
 private:
-    /**************************************************************************/
-    /*                              Member Variables                          */
-    /**************************************************************************/
 
     ble_library_config_t config_;              ///< Library configuration
     ble_state_t state_;                        ///< Current library state
@@ -512,10 +465,6 @@ private:
     uint32_t restartCount_;                   ///< Number of restarts
     uint64_t totalUpTime_;                    ///< Total uptime across restarts
 };
-
-/******************************************************************************/
-/*                              Convenience Functions                         */
-/******************************************************************************/
 
 /**
  * @brief Creates a client-only BLE library instance

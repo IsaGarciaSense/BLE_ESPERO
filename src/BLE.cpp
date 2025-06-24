@@ -11,15 +11,7 @@
 
 #include "BLE.hpp"
 
-/******************************************************************************/
-/*                              Static Variables                              */
-/******************************************************************************/
-
 // static const char* BLE_LIBRARY_TAG = "BLE_LIBRARY";
-
-/******************************************************************************/
-/*                              Constructor/Destructor                        */
-/******************************************************************************/
 
 BLELibrary::BLELibrary()
     : state_(BLE_STATE_UNINITIALIZED)
@@ -75,10 +67,6 @@ BLELibrary::~BLELibrary() {
         vSemaphoreDelete(stateMutex_);
     }
 }
-
-/******************************************************************************/
-/*                              Core Methods                                  */
-/******************************************************************************/
 
 esp_err_t BLELibrary::init() {
     ble_log(ESP_LOG_INFO, "Initializing BLE Library");
@@ -329,10 +317,6 @@ esp_err_t BLELibrary::restart() {
     return ret;
 }
 
-/******************************************************************************/
-/*                           Configuration Methods                            */
-/******************************************************************************/
-
 esp_err_t BLELibrary::setConfig(const ble_library_config_t& config) {
     if (!validateConfig(&config)) {
         return ESP_ERR_INVALID_ARG;
@@ -393,10 +377,6 @@ esp_err_t BLELibrary::setSecurityConfig(const ble_security_config_t& securityCon
     return ESP_OK;
 }
 
-/******************************************************************************/
-/*                            Client Interface                                */
-/******************************************************************************/
-
 BLEClient* BLELibrary::getClient() {
     if (config_.mode == BLE_MODE_SERVER_ONLY) {
         return nullptr;
@@ -432,10 +412,6 @@ esp_err_t BLELibrary::connectToServer(const esp_bd_addr_t serverMACadd) {
 
     return client_->connect(serverMACadd);
 }
-
-/******************************************************************************/
-/*                            Server Interface                                */
-/******************************************************************************/
 
 BLEServer* BLELibrary::getServer() {
     if (config_.mode == BLE_MODE_CLIENT_ONLY) {
@@ -477,10 +453,6 @@ esp_err_t BLELibrary::updateServerData(uint8_t batteryLevel, const char* customD
 
     return ret;
 }
-
-/******************************************************************************/
-/*                              Status Methods                                */
-/******************************************************************************/
 
 ble_state_t BLELibrary::getState() const {
     return state_;
@@ -531,10 +503,6 @@ ble_library_status_t BLELibrary::getStatus() const {
 esp_err_t BLELibrary::getLastError() const {
     return lastError_;
 }
-
-/******************************************************************************/
-/*                              Utility Methods                               */
-/******************************************************************************/
 
 const char* BLELibrary::getVersion() {
     return "0.0.6";  // actual version of the library
@@ -652,9 +620,9 @@ esp_err_t BLELibrary::generateStatusReport(char* buffer, size_t bufferSize) cons
             "Data Received: %lu\n",
             client_->getStateString(),
             client_->isConnected() ? "YES" : "NO",
-            client_stats.scan_count,
-            client_stats.successful_connections,
-            client_stats.data_packets_received
+            client_stats.scanCount,
+            client_stats.successfulConnections,
+            client_stats.dataReceived
         );
     }
 
@@ -699,10 +667,6 @@ void BLELibrary::resetAllStats() {
     ble_log(ESP_LOG_INFO, "All statistics reset");
 }
 
-/******************************************************************************/
-/*                              Event Methods                                 */
-/******************************************************************************/
-
 void BLELibrary::setEventCallback(ble_event_callback_t callback) {
     eventCallback_ = callback;
     ble_log(ESP_LOG_DEBUG, "Event callback registered");
@@ -713,10 +677,6 @@ void BLELibrary::setLogCallback(ble_log_callback_t callback) {
     ble_set_log_callback(callback);
     ble_log(ESP_LOG_DEBUG, "Log callback registered");
 }
-
-/******************************************************************************/
-/*                              Static Utilities                              */
-/******************************************************************************/
 
 esp_err_t BLELibrary::createDefaultConfig(ble_library_config_t* config, ble_mode_t mode) {
     if (config == nullptr) {
@@ -779,10 +739,6 @@ const char* BLELibrary::getStateString(ble_state_t state) {
     }
 }
 
-/******************************************************************************/
-/*                              Internal Methods                              */
-/******************************************************************************/
-
 esp_err_t BLELibrary::initClient() {
     if (clientInitialized_) {
         return ESP_OK;
@@ -798,14 +754,13 @@ esp_err_t BLELibrary::initClient() {
     // Configure client with default settings
     ble_client_config_t clientConfig;
     memset(&clientConfig, 0, sizeof(clientConfig));
-    strncpy(clientConfig.target_device_name, "ESP32_BLE_Server", BLE_MAX_DEVICE_NAME_LEN - 1);
-    clientConfig.scan_timeout_ms = 10000;
-    clientConfig.min_rssi = -90;
-    clientConfig.auto_reconnect = true;
-    clientConfig.reconnect_interval_ms = 5000;
-    clientConfig.connection_timeout_ms = 10000;
-    clientConfig.enable_notifications = true;
-    clientConfig.read_interval_ms = 5000;
+    strncpy(clientConfig.targetDeviceName, "ESP32_BLE_Server", BLE_MAX_DEVICE_NAME_LEN - 1);
+    clientConfig.scanTimeout = 10000;
+    clientConfig.autoReconnect = true;
+    clientConfig.reconnectInterval = 5000;
+    clientConfig.connectionTimeout = 10000;
+    clientConfig.enableNotifications = true;
+    clientConfig.readInterval = 5000;
 
     client_->setConfig(clientConfig);
 
@@ -921,10 +876,6 @@ void BLELibrary::handleServerEvent(int eventType, void* eventData) {
     }
 }
 
-/******************************************************************************/
-/*                              Convenience Functions                         */
-/******************************************************************************/
-
 BLELibrary* createBLEClient(const char* deviceName, const char* targetServer) {
     ble_library_config_t config;
     BLELibrary::createDefaultConfig(&config, BLE_MODE_CLIENT_ONLY);
@@ -937,9 +888,9 @@ BLELibrary* createBLEClient(const char* deviceName, const char* targetServer) {
     if (library != nullptr && targetServer != nullptr) {
         ble_client_config_t clientConfig;
         memset(&clientConfig, 0, sizeof(clientConfig));
-        strncpy(clientConfig.target_device_name, targetServer, BLE_MAX_DEVICE_NAME_LEN - 1);
-        clientConfig.scan_timeout_ms = 10000;
-        clientConfig.auto_reconnect = true;
+        strncpy(clientConfig.targetDeviceName, targetServer, BLE_MAX_DEVICE_NAME_LEN - 1);
+        clientConfig.scanTimeout = 10000;
+        clientConfig.autoReconnect = true;
 
         if (library->init() == ESP_OK) {
             library->setClientConfig(clientConfig);
@@ -977,9 +928,9 @@ BLELibrary* createBLEDual(const char* deviceName, const char* targetServer) {
     if (library != nullptr && targetServer != nullptr) {
         ble_client_config_t clientConfig;
         memset(&clientConfig, 0, sizeof(clientConfig));
-        strncpy(clientConfig.target_device_name, targetServer, BLE_MAX_DEVICE_NAME_LEN - 1);
-        clientConfig.scan_timeout_ms = 10000;
-        clientConfig.auto_reconnect = true;
+        strncpy(clientConfig.targetDeviceName, targetServer, BLE_MAX_DEVICE_NAME_LEN - 1);
+        clientConfig.scanTimeout = 10000;
+        clientConfig.autoReconnect = true;
 
         if (library->init() == ESP_OK) {
             library->setClientConfig(clientConfig);

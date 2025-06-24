@@ -3,8 +3,8 @@
  * @brief Contains declarations for BLE client functionality including scanning,
  * connecting, and data communication with BLE servers.
  *
- * @version 0.0.1
- * @date 2025-06-15
+ * @version 0.0.4
+ * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -12,10 +12,6 @@
 #pragma once
 
 #include "BLEConfigs.hpp"
-
-/******************************************************************************/
-/*                                   Enums                                    */
-/******************************************************************************/
 
 /**
  * @enum ble_client_state_t
@@ -47,24 +43,19 @@ typedef enum {
     BLE_CLIENT_EVENT_ERROR             ///< Error occurred
 } ble_client_event_t;
 
-/******************************************************************************/
-/*                                 Structures                                 */
-/******************************************************************************/
-
 /**
  * @struct ble_client_config_t
  * @brief Configuration structure for BLE client
  */
 typedef struct {
-    esp_bd_addr_t target_server_address;                ///< MAC address of target server
-    char target_device_name[BLE_MAX_DEVICE_NAME_LEN];  ///< Name of target server device
-    uint32_t scan_timeout_ms;                          ///< Scan timeout in milliseconds
-    int8_t min_rssi;                                   ///< Minimum RSSI to consider for connection
-    bool auto_reconnect;                               ///< Enable automatic reconnection
-    uint32_t reconnect_interval_ms;                    ///< Interval between reconnection attempts
-    uint32_t connection_timeout_ms;                    ///< Connection attempt timeout
-    bool enable_notifications;                         ///< Enable server notifications
-    uint32_t read_interval_ms;                        ///< Interval for automatic data reading
+    esp_bd_addr_t targetServerMACadd;                ///< MAC address of target server
+    char targetDeviceName[BLE_MAX_DEVICE_NAME_LEN];  ///< Name of target server device
+    uint32_t scanTimeout;                          ///< Scan timeout in milliseconds
+    bool autoReconnect;                               ///< Enable automatic reconnection
+    uint32_t reconnectInterval;                    ///< Interval between reconnection attempts MS
+    uint32_t connectionTimeout;                    ///< Connection attempt timeout MS
+    bool enableNotifications;                         ///< Enable server notifications
+    uint32_t readInterval;                        ///< Interval for automatic data reading MS
 } ble_client_config_t;
 
 /**
@@ -72,32 +63,28 @@ typedef struct {
  * @brief Statistics for BLE client operations
  */
 typedef struct {
-    uint32_t scan_count;                ///< Number of scans performed
-    uint32_t connection_attempts;       ///< Number of connection attempts
-    uint32_t successful_connections;    ///< Number of successful connections
-    uint32_t data_packets_received;     ///< Number of data packets received
-    uint32_t data_packets_sent;        ///< Number of data packets sent
+    uint32_t scanCount;                ///< Number of scans performed
+    uint32_t connectionAttempts;       ///< Number of connection attempts
+    uint32_t successfulConnections;    ///< Number of successful connections
+    uint32_t dataReceived;     ///< Number of data packets received
+    uint32_t dataSent;        ///< Number of data packets sent
     uint32_t disconnections;           ///< Number of disconnections
-    uint64_t total_uptime_ms;          ///< Total connected time
-    uint64_t last_connection_time;     ///< Timestamp of last connection
+    uint64_t totalUptime;          ///< Total connected time MS
+    uint64_t lastConnectionTime;     ///< Timestamp of last connection
 } ble_client_stats_t;
-
-/******************************************************************************/
-/*                                 Callbacks                                  */
-/******************************************************************************/
 
 /**
  * @brief Callback for when client connects to a server
- * @param device_info Information about the connected device
+ * @param deviceInfo Information about the connected device
  */
-typedef void (*ble_client_connected_cb_t)(const ble_device_info_t* device_info);
+typedef void (*ble_client_connected_cb_t)(const ble_device_info_t* deviceInfo);
 
 /**
  * @brief Callback for when client disconnects from server
  * @param reason Disconnection reason code
- * @param was_planned True if disconnection was planned, false if unexpected
+ * @param wasPlanned True if disconnection was planned, false if unexpected
  */
-typedef void (*ble_client_disconnected_cb_t)(int reason, bool was_planned);
+typedef void (*ble_client_disconnected_cb_t)(int reason, bool wasPlanned);
 
 /**
  * @brief Callback for when data is received from server
@@ -107,45 +94,37 @@ typedef void (*ble_client_data_received_cb_t)(const ble_data_packet_t* data);
 
 /**
  * @brief Callback for when a target device is found during scanning
- * @param device_info Information about the found device
- * @param should_connect Output parameter - set to true to connect to this device
+ * @param deviceInfo Information about the found device
+ * @param shouldConnect Output parameter - set to true to connect to this device
  */
-typedef void (*ble_client_device_found_cb_t)(const ble_device_info_t* device_info, bool* should_connect);
+typedef void (*ble_client_device_found_cb_t)(const ble_device_info_t* deviceInfo, bool* shouldConnect);
 
 /**
  * @brief Callback for authentication events
  * @param success True if authentication was successful
- * @param error_code Error code if authentication failed
+ * @param errorCode Error code if authentication failed
  */
-typedef void (*ble_client_auth_cb_t)(bool success, esp_err_t error_code);
-
-/******************************************************************************/
-/*                           NUEVOS CALLBACKS EXTENDIDOS                     */
-/******************************************************************************/
+typedef void (*ble_client_auth_cb_t)(bool success, esp_err_t errorCode);
 
 /**
  * @brief Callback para cuando cualquier dispositivo BLE es detectado durante el escaneo
- * @param device_info Información del dispositivo encontrado
- * @param is_target True si es el dispositivo objetivo, false si es otro dispositivo
+ * @param deviceInfo Información del dispositivo encontrado
+ * @param isTarget True si es el dispositivo objetivo, false si es otro dispositivo
  */
-typedef void (*ble_client_any_device_found_cb_t)(const ble_device_info_t* device_info, bool is_target);
+typedef void (*ble_client_any_device_found_cb_t)(const ble_device_info_t* deviceInfo, bool isTarget);
 
 /**
  * @brief Callback para cuando se inicia un escaneo
- * @param scan_duration_ms Duración del escaneo en milisegundos
+ * @param scanDuration Duración del escaneo en milisegundos
  */
-typedef void (*ble_client_scan_started_cb_t)(uint32_t scan_duration_ms);
+typedef void (*ble_client_scan_started_cb_t)(uint32_t scanDuration);
 
 /**
  * @brief Callback para cuando termina un escaneo
- * @param devices_found Número total de dispositivos encontrados
- * @param target_found True si se encontró el dispositivo objetivo
+ * @param devicesFound Número total de dispositivos encontrados
+ * @param targetFound True si se encontró el dispositivo objetivo
  */
-typedef void (*ble_client_scan_completed_cb_t)(uint32_t devices_found, bool target_found);
-
-/******************************************************************************/
-/*                                BLE Client Class                            */
-/******************************************************************************/
+typedef void (*ble_client_scan_completed_cb_t)(uint32_t devicesFound, bool targetFound);
 
 /**
  * @brief BLE Client class for connecting to and communicating with BLE servers
@@ -199,22 +178,21 @@ public:
      */
     esp_err_t stopScan();
 
-
     /**
      * @brief Sets the target device for scanning
      * 
-     * @param server_address Name of the target device to search for
+     * @param serverMACadd MAC address of the target device to search for
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setMacTarget(const esp_bd_addr_t server_address);
+    esp_err_t setMacTarget(const esp_bd_addr_t serverMACadd);
 
     /**
      * @brief Connects to a specific BLE server
      * 
-     * @param server_address MAC address of the server to connect to
+     * @param serverMACadd MAC address of the server to connect to
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t connect(const esp_bd_addr_t server_address);
+    esp_err_t connect(const esp_bd_addr_t serverMACadd);
 
     /**
      * @brief Disconnects from the current server
@@ -254,10 +232,6 @@ public:
      */
     esp_err_t setNotifications(bool enable);
 
-    /**************************************************************************/
-    /*                           Configuration Methods                        */
-    /**************************************************************************/
-
     /**
      * @brief Updates the client configuration
      * 
@@ -277,22 +251,10 @@ public:
     /**
      * @brief Sets the target device name to search for
      * 
-     * @param device_name Name of the target device
+     * @param deviceName Name of the target device
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setTargetDevice(const char* device_name);
-
-    /**
-     * @brief Sets the minimum RSSI threshold for connections
-     * 
-     * @param min_rssi Minimum RSSI value in dBm
-     * @return esp_err_t ESP_OK on success, error code otherwise
-     */
-    esp_err_t setMinRssi(int8_t min_rssi);
-
-    /**************************************************************************/
-    /*                            Callback Registration                       */
-    /**************************************************************************/
+    esp_err_t setTargetDevice(const char* deviceName);
 
     /**
      * @brief Registers callback for connection events
@@ -329,10 +291,6 @@ public:
      */
     void setAuthCallback(ble_client_auth_cb_t callback);
 
-    /**************************************************************************/
-    /*                         NUEVOS MÉTODOS EXTENDIDOS                     */
-    /**************************************************************************/
-
     /**
      * @brief Registra callback para detectar CUALQUIER dispositivo BLE durante el escaneo
      * 
@@ -363,10 +321,10 @@ public:
      * En este modo, el cliente escaneará y reportará TODOS los dispositivos BLE
      * encontrados sin intentar conectarse a ninguno.
      * 
-     * @param duration_ms Duración del escaneo en milisegundos
+     * @param duration Duración del escaneo en milisegundos
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t startDiscoveryScan(uint32_t duration_ms = 15000);
+    esp_err_t startDiscoveryScan(uint32_t duration = 15000);
 
     /**
      * @brief Inicia un escaneo filtrado buscando solo el dispositivo objetivo
@@ -381,9 +339,9 @@ public:
     /**
      * @brief Establece el modo de escaneo (discovery vs targeted)
      * 
-     * @param discovery_mode True para modo discovery (mostrar todos), false para modo targeted
+     * @param discoveryMode True para modo discovery (mostrar todos), false para modo targeted
      */
-    void setScanMode(bool discovery_mode);
+    void setScanMode(bool discoveryMode);
 
     /**
      * @brief Obtiene el número de dispositivos únicos encontrados en la sesión actual
@@ -404,10 +362,6 @@ public:
      * @return ble_device_info_t* Puntero a la info del dispositivo, nullptr si índice inválido
      */
     const ble_device_info_t* getFoundDevice(uint32_t index) const;
-
-    /**************************************************************************/
-    /*                              Status Methods                            */
-    /**************************************************************************/
 
     /**
      * @brief Gets the current client state
@@ -456,10 +410,6 @@ public:
      */
     void resetStats();
 
-    /**************************************************************************/
-    /*                              Utility Methods                           */
-    /**************************************************************************/
-
     /**
      * @brief Gets a string representation of the current state
      * 
@@ -489,10 +439,6 @@ public:
     bool performHealthCheck();
 
 protected:
-    /**************************************************************************/
-    /*                              Internal Methods                          */
-    /**************************************************************************/
-
     /**
      * @brief Internal GAP callback handler
      * 
@@ -505,19 +451,19 @@ protected:
      * @brief Internal GATTC callback handler
      * 
      * @param event GATTC event type
-     * @param gattc_if GATT client interface
+     * @param gattCInter GATT client interface
      * @param param Event parameters
      */
-    static void gattcCallback(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, 
+    static void gattcCallback(esp_gattc_cb_event_t event, esp_gatt_if_t gattCInter, 
                              esp_ble_gattc_cb_param_t *param);
 
     /**
      * @brief Verifies if a discovered device matches our target
      * 
-     * @param scan_result Scan result data
+     * @param scanResult Scan result data
      * @return bool True if device is verified as target
      */
-    bool verifyTargetDevice(esp_ble_gap_cb_param_t *scan_result);
+    bool verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult);
 
     /**
      * @brief Handles authentication with the server
@@ -610,85 +556,74 @@ protected:
      */
     void handleNotification(esp_ble_gattc_cb_param_t *param);
 
-    /**************************************************************************/
-    /*                       NUEVOS MÉTODOS PRIVADOS                         */
-    /**************************************************************************/
+    /**
+     * @brief Add device to the list of found devices (if it doesn't already exist)
+     * 
+     * @param deviceInfo Information about the device to add
+     * @return bool True if added (new), false if already existed
+     */
+    bool addToFoundDevices(const ble_device_info_t* deviceInfo);
 
     /**
-     * @brief Agrega un dispositivo a la lista de encontrados (si no existe ya)
+     * @brief verify if a device is already in the list of found devices
      * 
-     * @param device_info Información del dispositivo a agregar
-     * @return bool True si se agregó (nuevo), false si ya existía
+     * @param MACadd MAC address of the device
+     * @return bool True if already in the list, false if new
      */
-    bool addToFoundDevices(const ble_device_info_t* device_info);
-
-    /**
-     * @brief Verifica si un dispositivo ya está en la lista de encontrados
-     * 
-     * @param address Dirección MAC del dispositivo
-     * @return bool True si ya está en la lista, false si es nuevo
-     */
-    bool isDeviceAlreadyFound(const esp_bd_addr_t address) const;
+    bool isDeviceAlreadyFound(const esp_bd_addr_t MACadd) const;
 
 private:
-    /**************************************************************************/
-    /*                              Member Variables                          */
-    /**************************************************************************/
 
     ble_client_config_t config_;                   ///< Client configuration
     ble_client_state_t state_;                     ///< Current client state
-    ble_security_config_t security_config_;       ///< Security configuration
+    ble_security_config_t securityConfig_;       ///< Security configuration
     
-    esp_gatt_if_t gattc_if_;                      ///< GATT client interface
-    uint16_t conn_id_;                            ///< Connection ID
-    ble_device_info_t connected_device_;          ///< Currently connected device info
-    ble_data_packet_t last_data_;                 ///< Last received data
+    esp_gatt_if_t gattCInter_;                      ///< GATT client interface
+    uint16_t connID_;                            ///< Connection ID
+    ble_device_info_t connectedDevice_;          ///< Currently connected device info
+    ble_data_packet_t lastData_;                 ///< Last received data
     ble_client_stats_t stats_;                    ///< Operation statistics
     
     // Service and characteristic handles
-    uint16_t service_start_handle_;               ///< Service start handle
-    uint16_t service_end_handle_;                 ///< Service end handle
-    uint16_t battery_char_handle_;                ///< Battery characteristic handle
-    uint16_t custom_char_handle_;                 ///< Custom characteristic handle
-    
+    uint16_t serviceStartHandle_;               ///< Service start handle
+    uint16_t serviceEndHandle_;                 ///< Service end handle
+    uint16_t batteryCharHandle_;                ///< Battery characteristic handle
+    uint16_t customCharHandle_;                 ///< Custom characteristic handle
+
     // Callbacks
-    ble_client_connected_cb_t connected_cb_;      ///< Connection callback
-    ble_client_disconnected_cb_t disconnected_cb_; ///< Disconnection callback
-    ble_client_data_received_cb_t data_received_cb_; ///< Data received callback
-    ble_client_device_found_cb_t device_found_cb_; ///< Device found callback
-    ble_client_auth_cb_t auth_cb_;                ///< Authentication callback
+    ble_client_connected_cb_t connectedCB_;      ///< Connection callback
+    ble_client_disconnected_cb_t disconnectedCB_; ///< Disconnection callback
+    ble_client_data_received_cb_t dataReceivedCB_; ///< Data received callback
+    ble_client_device_found_cb_t deviceFoundCB_; ///< Device found callback
+    ble_client_auth_cb_t authCB_;                ///< Authentication callback
     
     // Task handles
-    TaskHandle_t data_read_task_handle_;          ///< Data reading task handle
-    TaskHandle_t reconnect_task_handle_;          ///< Reconnection task handle
+    TaskHandle_t dataReadTaskHandle_;          ///< Data reading task handle
+    TaskHandle_t reconnectTaskHandle_;          ///< Reconnection task handle
     
     // Synchronization
-    SemaphoreHandle_t state_mutex_;               ///< State protection mutex
+    SemaphoreHandle_t stateMutex_;               ///< State protection mutex
     
     // Timing
-    uint64_t connection_start_time_;              ///< Connection start timestamp
-    uint64_t last_data_time_;                     ///< Last data received timestamp
-    
+    uint64_t connectionStartTime_;              ///< Connection start timestamp
+    uint64_t lastDataTime_;                     ///< Last data received timestamp
+
     // Static instance for callbacks
     static BLEClient* instance_;                  ///< Static instance for C callbacks
 
-    /**************************************************************************/
-    /*                       NUEVAS VARIABLES PRIVADAS                       */
-    /**************************************************************************/
-
     // Callbacks extendidos
-    ble_client_any_device_found_cb_t any_device_found_cb_;     ///< Callback para cualquier dispositivo
-    ble_client_scan_started_cb_t scan_started_cb_;             ///< Callback de inicio de escaneo
-    ble_client_scan_completed_cb_t scan_completed_cb_;         ///< Callback de fin de escaneo
+    ble_client_any_device_found_cb_t anyDeviceFoundCB_;     ///< Callback para cualquier dispositivo
+    ble_client_scan_started_cb_t scanStartedCB_;             ///< Callback de inicio de escaneo
+    ble_client_scan_completed_cb_t scanCompletedCB_;         ///< Callback de fin de escaneo
 
     // Control de modo de escaneo
-    bool discovery_mode_;                                       ///< True para modo discovery, false para targeted
-    uint32_t current_scan_duration_;                          ///< Duración actual del escaneo
-    uint64_t scan_start_time_;                                 ///< Tiempo de inicio del escaneo actual
+    bool discoveryMode_;                                       ///< True para modo discovery, false para targeted
+    uint32_t currentScanDuration_;                          ///< Duración actual del escaneo
+    uint64_t scanStartTime_;                                 ///< Tiempo de inicio del escaneo actual
 
     // Lista de dispositivos encontrados
     static const uint32_t MAX_FOUND_DEVICES = 50;
-    ble_device_info_t found_devices_[MAX_FOUND_DEVICES];      ///< Lista de dispositivos encontrados
-    uint32_t found_devices_count_;                            ///< Número de dispositivos únicos encontrados
-    bool target_device_found_in_scan_;                        ///< Flag si se encontró el target en el escaneo actual
+    ble_device_info_t foundDevices_[MAX_FOUND_DEVICES];      ///< Lista de dispositivos encontrados
+    uint32_t foundDevicesCount_;                            ///< Número de dispositivos únicos encontrados
+    bool targetDeviceFoundInScan_;                        ///< Flag si se encontró el target en el escaneo actual
 };
