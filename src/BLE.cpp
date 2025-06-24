@@ -3,8 +3,8 @@
  * @brief Implementation of the main BLE library providing unified interface
  * for both client and server functionality with flexible operating modes.
  *
- * @version 0.0.1
- * @date 2025-06-15
+ * @version 0.0.5
+ * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -792,14 +792,13 @@ esp_err_t BLELibrary::initServer() {
     ble_server_config_t serverConfig;
     memset(&serverConfig, 0, sizeof(serverConfig));
     strncpy(serverConfig.deviceName, config_.deviceName, BLE_MAX_DEVICE_NAME_LEN - 1);
-    serverConfig.advertising_interval_ms = 100;
-    serverConfig.auto_start_advertising = false;  // We'll start manually
-    serverConfig.data_update_interval_ms = 5000;
-    serverConfig.simulate_battery_drain = true;
-    serverConfig.max_clients = 4;
-    serverConfig.client_timeout_ms = 30000;
-    serverConfig.require_authentication = config_.security.require_authentication;
-    serverConfig.enable_notifications = true;
+    serverConfig.advertisingInterval = 100;
+    serverConfig.autoStartAdvertising = false;  // We'll start manually
+    serverConfig.dataUpdateInterval = 5000;
+    serverConfig.maxClients = 4;
+    serverConfig.clientTimeout = 30000;
+    serverConfig.requireAuthentication = config_.security.requireAuthentication;
+    serverConfig.enableNotifications = true;
 
     server_->setConfig(serverConfig);
 

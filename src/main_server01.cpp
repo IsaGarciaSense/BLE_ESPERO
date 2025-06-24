@@ -68,13 +68,12 @@ extern "C" void app_main() {
         
         // Configurar servidor sin las tareas automáticas que causan problemas
         ble_server_config_t server_config = server->getConfig();
-        server_config.data_update_interval_ms = 0;    // Desactivar tarea automática
-        server_config.client_timeout_ms = 0;          // Desactivar tarea de timeout
-        server_config.simulate_battery_drain = false; // Desactivar simulación
-        server_config.max_clients = 4;
-        server_config.enable_notifications = true;
-        server_config.auto_start_advertising = false;
-        
+        server_config.dataUpdateInterval = 0;    // Desactivar tarea automática
+        server_config.clientTimeout = 0;          // Desactivar tarea de timeout
+        server_config.maxClients = 4;
+        server_config.enableNotifications = true;
+        server_config.autoStartAdvertising = false;
+
         ret = server->setConfig(server_config);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Advertencia al configurar servidor: %s", esp_err_to_name(ret));

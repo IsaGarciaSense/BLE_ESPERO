@@ -53,17 +53,16 @@ static esp_ble_adv_params_t adv_params_ = {
 /******************************************************************************/
 
 static const ble_server_config_t default_server_config = {
-    .deviceName = "ESP32-BLE-Server",
-    .advertising_interval_ms = 1000,
-    .auto_start_advertising = true,
-    .data_update_interval_ms = 5000,
-    .simulate_battery_drain = true,
-    .max_clients = 4,
-    .client_timeout_ms = 30000,
-    .require_authentication = false,
-    .enable_notifications = true,
-    .enable_json_commands = true,
-    .max_json_size = 512
+    .deviceName = "154-BLE-Server",
+    .advertisingInterval = 1000,
+    .autoStartAdvertising = true,
+    .dataUpdateInterval = 5000,
+    .maxClients = 4,
+    .clientTimeout = 30000,
+    .requireAuthentication = false,
+    .enableNotifications = true,
+    .enableJsonCommands = true,
+    .maxJsonSize = 512
 };
 
 /******************************************************************************/
@@ -82,7 +81,7 @@ BLEServer::BLEServer(const ble_server_config_t& config) :
     custom_char_handle_(BLE_INVALID_HANDLE),
     battery_descr_handle_(BLE_INVALID_HANDLE),
     custom_descr_handle_(BLE_INVALID_HANDLE),
-    max_clients_(config.max_clients),
+    max_clients_(config.maxClients),
     client_connected_cb_(nullptr),
     client_disconnected_cb_(nullptr),
     data_written_cb_(nullptr),
@@ -106,7 +105,7 @@ BLEServer::BLEServer(const ble_server_config_t& config) :
     memset(&status_, 0, sizeof(status_));
     status_.state = state_;
     status_.battery_level = battery_level_;
-    status_.json_processing_enabled = config_.enable_json_commands;
+    status_.json_processing_enabled = config_.enableJsonCommands;
     strcpy(status_.custom_data, "Hello from ESP32!");
     
     // Initialize statistics
@@ -120,7 +119,7 @@ BLEServer::BLEServer(const ble_server_config_t& config) :
     ble_create_default_security_config(&security_config_, BLE_SECURITY_BASIC);
 
     ESP_LOGI(TAG, "BLEServer created with device name: %s", config_.deviceName);
-    ESP_LOGI(TAG, "JSON commands: %s", config_.enable_json_commands ? "ENABLED" : "DISABLED");
+    ESP_LOGI(TAG, "JSON commands: %s", config_.enableJsonCommands ? "ENABLED" : "DISABLED");
 }
 
 BLEServer::~BLEServer() {
@@ -202,8 +201,8 @@ esp_err_t BLEServer::init() {
     }
     
     // Configure advertising data
-    if (security_config_.use_custom_uuids) {
-        adv_data_.p_service_uuid = (uint8_t*)security_config_.service_uuid;
+    if (security_config_.useCustomUUIDS) {
+        adv_data_.p_service_uuid = (uint8_t*)security_config_.serviceUUID;
     } else {
         // Use 16-bit UUID for basic security
         static uint8_t service_uuid_16[2] = {
@@ -221,14 +220,14 @@ esp_err_t BLEServer::init() {
     }
     
     // Update advertising interval
-    setAdvertisingInterval(config_.advertising_interval_ms);
-    
+    setAdvertisingInterval(config_.advertisingInterval);
+
     // Start tasks only if intervals are set
-    if (config_.data_update_interval_ms > 0) {
+    if (config_.dataUpdateInterval > 0) {
         xTaskCreate(dataUpdateTask, "ble_server_data", 4096, this, 5, &data_update_task_handle_);
     }
     
-    if (config_.client_timeout_ms > 0) {
+    if (config_.clientTimeout > 0) {
         xTaskCreate(clientTimeoutTask, "ble_server_timeout", 4096, this, 3, &client_timeout_task_handle_);
     }
     
@@ -238,7 +237,7 @@ esp_err_t BLEServer::init() {
     ESP_LOGI(TAG, "BLE server initialized successfully");
     
     // Auto-start advertising if configured
-    if (config_.auto_start_advertising) {
+    if (config_.autoStartAdvertising) {
         startAdvertising();
     }
     
@@ -324,7 +323,7 @@ esp_err_t BLEServer::setBatteryLevel(uint8_t level) {
         ESP_LOGD(TAG, "Battery level updated to %d%%", level);
         
         // Notify connected clients if notifications are enabled
-        if (config_.enable_notifications) {
+        if (config_.enableNotifications) {
             notifyAllClients();
         }
         
@@ -356,7 +355,7 @@ esp_err_t BLEServer::setCustomData(const char* data) {
         ESP_LOGD(TAG, "Custom data updated: %s", custom_data_);
         
         // Notify connected clients if notifications are enabled
-        if (config_.enable_notifications) {
+        if (config_.enableNotifications) {
             notifyAllClients();
         }
         
@@ -418,8 +417,8 @@ esp_err_t BLEServer::sendJsonResponseToAll(const char* json_response) {
     
     if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
         for (int i = 0; i < max_clients_; i++) {
-            if (client_sessions_[i].conn_id != 0) {
-                esp_err_t ret = sendJsonResponse(client_sessions_[i].conn_id, json_response);
+            if (client_sessions_[i].connID != 0) {
+                esp_err_t ret = sendJsonResponse(client_sessions_[i].connID, json_response);
                 if (ret != ESP_OK) {
                     result = ret;
                 }
@@ -436,8 +435,8 @@ esp_err_t BLEServer::notifyAllClients() {
     
     if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
         for (int i = 0; i < max_clients_; i++) {
-            if (client_sessions_[i].conn_id != 0 && client_sessions_[i].notifications_enabled) {
-                esp_err_t ret = notifyClient(client_sessions_[i].conn_id, "both");
+            if (client_sessions_[i].connID != 0 && client_sessions_[i].notifications_enabled) {
+                esp_err_t ret = notifyClient(client_sessions_[i].connID, "both");
                 if (ret != ESP_OK) {
                     result = ret;
                 }
@@ -467,7 +466,7 @@ esp_err_t BLEServer::notifyClient(uint16_t conn_id, const char* characteristic_t
                 // Update client session stats
                 if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
                     for (int i = 0; i < max_clients_; i++) {
-                        if (client_sessions_[i].conn_id == conn_id) {
+                        if (client_sessions_[i].connID == conn_id) {
                             client_sessions_[i].data_packets_sent++;
                             client_sessions_[i].last_activity = ble_get_timestamp();
                             break;
@@ -502,7 +501,7 @@ esp_err_t BLEServer::notifyClient(uint16_t conn_id, const char* characteristic_t
 /******************************************************************************/
 
 void BLEServer::processJsonData(uint16_t conn_id, const uint8_t* data, uint16_t length) {
-    if (!config_.enable_json_commands || !data || length == 0) {
+    if (!config_.enableJsonCommands || !data || length == 0) {
         return;
     }
     
@@ -510,7 +509,7 @@ void BLEServer::processJsonData(uint16_t conn_id, const uint8_t* data, uint16_t 
     ble_client_session_t* session = nullptr;
     if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
         for (int i = 0; i < max_clients_; i++) {
-            if (client_sessions_[i].conn_id == conn_id) {
+            if (client_sessions_[i].connID == conn_id) {
                 session = &client_sessions_[i];
                 break;
             }
@@ -596,8 +595,8 @@ esp_err_t BLEServer::disconnectAllClients() {
     
     if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
         for (int i = 0; i < max_clients_; i++) {
-            if (client_sessions_[i].conn_id != 0) {
-                esp_err_t ret = disconnectClient(client_sessions_[i].conn_id);
+            if (client_sessions_[i].connID != 0) {
+                esp_err_t ret = disconnectClient(client_sessions_[i].connID);
                 if (ret != ESP_OK) {
                     result = ret;
                 }
@@ -609,19 +608,19 @@ esp_err_t BLEServer::disconnectAllClients() {
     return result;
 }
 
-esp_err_t BLEServer::addClientSession(uint16_t conn_id, const esp_bd_addr_t client_addr) {
+esp_err_t BLEServer::addClientSession(uint16_t connID, const esp_bd_addr_t client_addr) {
     if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
         // Find empty slot
         for (int i = 0; i < max_clients_; i++) {
-            if (client_sessions_[i].conn_id == 0) {
-                client_sessions_[i].conn_id = conn_id;
+            if (client_sessions_[i].connID == 0) {
+                client_sessions_[i].connID = connID;
                 memcpy(client_sessions_[i].address, client_addr, sizeof(esp_bd_addr_t));
-                client_sessions_[i].authenticated = !config_.require_authentication;
-                client_sessions_[i].connect_time = ble_get_timestamp();
-                client_sessions_[i].last_activity = client_sessions_[i].connect_time;
+                client_sessions_[i].authenticated = !config_.requireAuthentication;
+                client_sessions_[i].connectTime = ble_get_timestamp();
+                client_sessions_[i].last_activity = client_sessions_[i].connectTime;
                 client_sessions_[i].data_packets_sent = 0;
                 client_sessions_[i].data_packets_received = 0;
-                client_sessions_[i].notifications_enabled = config_.enable_notifications;
+                client_sessions_[i].notifications_enabled = config_.enableNotifications;
                 client_sessions_[i].json_buffer_pos = 0;
                 memset(client_sessions_[i].json_buffer, 0, sizeof(client_sessions_[i].json_buffer));
                 
@@ -631,31 +630,31 @@ esp_err_t BLEServer::addClientSession(uint16_t conn_id, const esp_bd_addr_t clie
                 
                 xSemaphoreGive(clients_mutex_);
                 
-                ESP_LOGI(TAG, "Added client session %d (total clients: %d)", conn_id, status_.connected_clients);
+                ESP_LOGI(TAG, "Added client session %d (total clients: %d)", connID, status_.connected_clients);
                 return ESP_OK;
             }
         }
         xSemaphoreGive(clients_mutex_);
         
-        ESP_LOGW(TAG, "No available slots for new client %d", conn_id);
+        ESP_LOGW(TAG, "No available slots for new client %d", connID);
         return ESP_ERR_NO_MEM;
     }
     
     return ESP_ERR_TIMEOUT;
 }
 
-esp_err_t BLEServer::removeClientSession(uint16_t conn_id) {
+esp_err_t BLEServer::removeClientSession(uint16_t connID) {
     if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
         for (int i = 0; i < max_clients_; i++) {
-            if (client_sessions_[i].conn_id == conn_id) {
+            if (client_sessions_[i].connID == connID) {
                 memset(&client_sessions_[i], 0, sizeof(ble_client_session_t));
                 status_.connected_clients--;
                 stats_.current_clients--;
                 
                 xSemaphoreGive(clients_mutex_);
-                
-                ESP_LOGI(TAG, "Removed client session %d (remaining clients: %d)", conn_id, status_.connected_clients);
-                
+
+                ESP_LOGI(TAG, "Removed client session %d (remaining clients: %d)", connID, status_.connected_clients);
+
                 // Update server state
                 if (status_.connected_clients == 0) {
                     if (status_.advertising_active) {
@@ -672,7 +671,7 @@ esp_err_t BLEServer::removeClientSession(uint16_t conn_id) {
         xSemaphoreGive(clients_mutex_);
     }
     
-    ESP_LOGW(TAG, "Client session %d not found", conn_id);
+    ESP_LOGW(TAG, "Client session %d not found", connID);
     return ESP_ERR_NOT_FOUND;
 }
 
@@ -682,11 +681,11 @@ esp_err_t BLEServer::removeClientSession(uint16_t conn_id) {
 
 esp_err_t BLEServer::setConfig(const ble_server_config_t& config) {
     config_ = config;
-    max_clients_ = config.max_clients;
-    status_.json_processing_enabled = config.enable_json_commands;
-    
+    max_clients_ = config.maxClients;
+    status_.json_processing_enabled = config.enableJsonCommands;
+
     ESP_LOGI(TAG, "Configuration updated");
-    ESP_LOGI(TAG, "JSON commands: %s", config_.enable_json_commands ? "ENABLED" : "DISABLED");
+    ESP_LOGI(TAG, "JSON commands: %s", config_.enableJsonCommands ? "ENABLED" : "DISABLED");
     return ESP_OK;
 }
 
@@ -712,7 +711,7 @@ esp_err_t BLEServer::setDeviceName(const char* deviceName) {
 }
 
 esp_err_t BLEServer::setAdvertisingInterval(uint32_t interval_ms) {
-    config_.advertising_interval_ms = interval_ms;
+    config_.advertisingInterval = interval_ms;
     
     // Convert to BLE units (0.625ms units)
     uint16_t interval = (uint16_t)(interval_ms * 1000 / 625);
@@ -784,7 +783,7 @@ ble_server_status_t BLEServer::getStatus() const {
 const ble_client_session_t* BLEServer::getClientSession(uint16_t conn_id) const {
     if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
         for (int i = 0; i < max_clients_; i++) {
-            if (client_sessions_[i].conn_id == conn_id) {
+            if (client_sessions_[i].connID == conn_id) {
                 xSemaphoreGive(clients_mutex_);
                 return &client_sessions_[i];
             }
@@ -804,7 +803,7 @@ uint8_t BLEServer::getAllClientSessions(ble_client_session_t* sessions, uint8_t 
     
     if (xSemaphoreTake(clients_mutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
         for (int i = 0; i < max_clients_ && count < max_sessions; i++) {
-            if (client_sessions_[i].conn_id != 0) {
+            if (client_sessions_[i].connID != 0) {
                 sessions[count] = client_sessions_[i];
                 count++;
             }
@@ -870,7 +869,7 @@ bool BLEServer::performHealthCheck() {
     
     ESP_LOGI(TAG, "Health check: %s (JSON commands: %s)", 
              healthy ? "PASS" : "FAIL",
-             config_.enable_json_commands ? "ON" : "OFF");
+             config_.enableJsonCommands ? "ON" : "OFF");
     return healthy;
 }
 
@@ -918,7 +917,7 @@ esp_err_t BLEServer::generateStatusReport(char* buffer, size_t buffer_size) cons
         stats.data_packets_received,
         stats.json_commands_processed,
         stats.json_commands_failed,
-        config_.enable_json_commands ? "ENABLED" : "DISABLED",
+        config_.enableJsonCommands ? "ENABLED" : "DISABLED",
         esp_get_free_heap_size()
     );
     
@@ -937,25 +936,12 @@ void BLEServer::dataUpdateTask(void *pvParameters) {
     BLEServer* server = static_cast<BLEServer*>(pvParameters);
     
     TickType_t last_wake_time = xTaskGetTickCount();
-    const TickType_t task_period = pdMS_TO_TICKS(server->config_.data_update_interval_ms);
+    const TickType_t task_period = pdMS_TO_TICKS(server->config_.dataUpdateInterval);
     
-    ESP_LOGI(TAG, "Data update task started (interval: %ld ms)", server->config_.data_update_interval_ms);
+    ESP_LOGI(TAG, "Data update task started (interval: %ld ms)", server->config_.dataUpdateInterval);
     
     while (true) {
         vTaskDelayUntil(&last_wake_time, task_period);
-        
-        // Simulate battery drain if enabled
-        if (server->config_.simulate_battery_drain) {
-            uint8_t current_battery = server->battery_level_;
-            if (current_battery > 0) {
-                // Simulate 1% drain every update cycle
-                server->setBatteryLevel(current_battery - 1);
-            } else {
-                // Reset to 100% when battery is empty
-                server->setBatteryLevel(100);
-            }
-        }
-        
         // Update custom data with timestamp
         char timestamp_data[BLE_MAX_CUSTOM_DATA_LEN];
         snprintf(timestamp_data, sizeof(timestamp_data), "Data-%lld", ble_get_timestamp() / 1000000);
@@ -968,28 +954,28 @@ void BLEServer::clientTimeoutTask(void *pvParameters) {
     
     const TickType_t check_interval = pdMS_TO_TICKS(5000);  // Check every 5 seconds
     
-    ESP_LOGI(TAG, "Client timeout task started (timeout: %ld ms)", server->config_.client_timeout_ms);
+    ESP_LOGI(TAG, "Client timeout task started (timeout: %ld ms)", server->config_.clientTimeout);
     
     while (true) {
         vTaskDelay(check_interval);
         
         uint64_t current_time = ble_get_timestamp();
-        uint64_t timeout_threshold = server->config_.client_timeout_ms * 1000;  // Convert to microseconds
+        uint64_t timeout_threshold = server->config_.clientTimeout * 1000;  // Convert to microseconds
         
         if (xSemaphoreTake(server->clients_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
             for (int i = 0; i < server->max_clients_; i++) {
-                if (server->client_sessions_[i].conn_id != 0) {
+                if (server->client_sessions_[i].connID != 0) {
                     uint64_t inactive_time = current_time - server->client_sessions_[i].last_activity;
                     
                     if (inactive_time > timeout_threshold) {
                         ESP_LOGW(TAG, "Client %d timed out after %lld ms", 
-                                server->client_sessions_[i].conn_id, inactive_time / 1000);
+                                server->client_sessions_[i].connID, inactive_time / 1000);
                         
                         // Disconnect timed-out client
-                        uint16_t conn_id = server->client_sessions_[i].conn_id;
+                        uint16_t connID = server->client_sessions_[i].connID;
                         xSemaphoreGive(server->clients_mutex_);
                         
-                        server->disconnectClient(conn_id);
+                        server->disconnectClient(connID);
                         
                         // Re-acquire mutex for next iteration
                         if (xSemaphoreTake(server->clients_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -1008,7 +994,7 @@ void BLEServer::clientTimeoutTask(void *pvParameters) {
 /******************************************************************************/
 
 bool BLEServer::validateClientAuthentication(uint16_t conn_id, const char* auth_data) {
-    if (!config_.require_authentication) {
+    if (!config_.requireAuthentication) {
         return true;  // Authentication not required
     }
     
@@ -1018,7 +1004,7 @@ bool BLEServer::validateClientAuthentication(uint16_t conn_id, const char* auth_
     }
     
     // Check against configured authentication key
-    if (strcmp(auth_data, security_config_.auth_key) == 0) {
+    if (strcmp(auth_data, security_config_.authKey) == 0) {
         ESP_LOGI(TAG, "Client %d: Authentication successful", conn_id);
         return true;
     }
@@ -1086,10 +1072,10 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                 service_id.is_primary = true;
                 service_id.id.inst_id = 0x00;
                 
-                if (instance_->security_config_.use_custom_uuids) {
+                if (instance_->security_config_.useCustomUUIDS) {
                     service_id.id.uuid.len = ESP_UUID_LEN_128;
                     memcpy(service_id.id.uuid.uuid.uuid128, 
-                           instance_->security_config_.service_uuid, 16);
+                           instance_->security_config_.serviceUUID, 16);
                 } else {
                     service_id.id.uuid.len = ESP_UUID_LEN_16;
                     service_id.id.uuid.uuid.uuid16 = BLE_DEFAULT_SERVICE_UUID_16;
@@ -1108,10 +1094,10 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             
             // Add battery characteristic
             esp_bt_uuid_t battery_char_uuid;
-            if (instance_->security_config_.use_custom_uuids) {
+            if (instance_->security_config_.useCustomUUIDS) {
                 battery_char_uuid.len = ESP_UUID_LEN_128;
                 memcpy(battery_char_uuid.uuid.uuid128, 
-                       instance_->security_config_.battery_char_uuid, 16);
+                       instance_->security_config_.batteryCharUUID, 16);
             } else {
                 battery_char_uuid.len = ESP_UUID_LEN_16;
                 battery_char_uuid.uuid.uuid16 = BLE_DEFAULT_BATTERY_CHAR_UUID;
@@ -1132,10 +1118,10 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                     
                     // Add custom characteristic
                     esp_bt_uuid_t custom_char_uuid;
-                    if (instance_->security_config_.use_custom_uuids) {
+                    if (instance_->security_config_.useCustomUUIDS) {
                         custom_char_uuid.len = ESP_UUID_LEN_128;
                         memcpy(custom_char_uuid.uuid.uuid128, 
-                               instance_->security_config_.custom_char_uuid, 16);
+                               instance_->security_config_.customCharUUID, 16);
                     } else {
                         custom_char_uuid.len = ESP_UUID_LEN_16;
                         custom_char_uuid.uuid.uuid16 = BLE_DEFAULT_CUSTOM_CHAR_UUID;
@@ -1184,8 +1170,8 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                 ble_device_info_t client_info;
                 memcpy(client_info.address, param->connect.remote_bda, sizeof(esp_bd_addr_t));
                 client_info.rssi = 0;  // RSSI not available in connect event
-                client_info.authenticated = !instance_->config_.require_authentication;
-                client_info.last_seen = ble_get_timestamp();
+                client_info.authenticated = !instance_->config_.requireAuthentication;
+                client_info.lastSeen = ble_get_timestamp();
                 strcpy(client_info.name, "Unknown");
                 
                 instance_->client_connected_cb_(param->connect.conn_id, &client_info);
@@ -1211,7 +1197,7 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             }
 
             // Restart advertising si auto-advertising está habilitado (sin importar clientes)
-            if (instance_->config_.auto_start_advertising) {
+            if (instance_->config_.autoStartAdvertising) {
                 if (!instance_->isAdvertising()) {
                     instance_->startAdvertising();
                 }
@@ -1248,7 +1234,7 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             // Update client activity
             if (xSemaphoreTake(instance_->clients_mutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
                 for (int i = 0; i < instance_->max_clients_; i++) {
-                    if (instance_->client_sessions_[i].conn_id == param->read.conn_id) {
+                    if (instance_->client_sessions_[i].connID == param->read.conn_id) {
                         instance_->client_sessions_[i].last_activity = ble_get_timestamp();
                         break;
                     }
@@ -1263,7 +1249,7 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             
             if (param->write.handle == instance_->custom_char_handle_) {
                 // Process JSON data if enabled
-                if (instance_->config_.enable_json_commands) {
+                if (instance_->config_.enableJsonCommands) {
                     instance_->processJsonData(param->write.conn_id, param->write.value, param->write.len);
                 } else {
                     // Update custom data from client write (legacy mode)
@@ -1286,7 +1272,7 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                 // Update client activity and stats
                 if (xSemaphoreTake(instance_->clients_mutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
                     for (int i = 0; i < instance_->max_clients_; i++) {
-                        if (instance_->client_sessions_[i].conn_id == param->write.conn_id) {
+                        if (instance_->client_sessions_[i].connID == param->write.conn_id) {
                             instance_->client_sessions_[i].last_activity = ble_get_timestamp();
                             instance_->client_sessions_[i].data_packets_received++;
                             break;

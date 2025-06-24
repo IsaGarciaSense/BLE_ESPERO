@@ -3,8 +3,8 @@
  * @brief Contains declarations for BLE server functionality including advertising,
  * client management, service provisioning, and JSON command processing.
  *
- * @version 0.0.2
- * @date 2025-06-19
+ * @version 0.0.5
+ * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -12,10 +12,6 @@
 #pragma once
 
 #include "BLEConfigs.hpp"
-
-/******************************************************************************/
-/*                                   Enums                                    */
-/******************************************************************************/
 
 /**
  * @enum ble_server_state_t
@@ -45,26 +41,21 @@ typedef enum {
     BLE_SERVER_EVENT_ERROR                 ///< Error occurred
 } ble_server_event_t;
 
-/******************************************************************************/
-/*                                 Structures                                 */
-/******************************************************************************/
-
 /**
  * @struct ble_server_config_t
  * @brief Configuration structure for BLE server
  */
 typedef struct {
     char deviceName[BLE_MAX_DEVICE_NAME_LEN];     ///< Server device name
-    uint32_t advertising_interval_ms;              ///< Advertising interval in milliseconds
-    bool auto_start_advertising;                   ///< Auto-start advertising on init
-    uint32_t data_update_interval_ms;              ///< Interval for automatic data updates
-    bool simulate_battery_drain;                   ///< Simulate battery level changes
-    uint8_t max_clients;                          ///< Maximum number of simultaneous clients
-    uint32_t client_timeout_ms;                   ///< Client inactivity timeout
-    bool require_authentication;                   ///< Require client authentication
-    bool enable_notifications;                     ///< Enable data notifications to clients
-    bool enable_json_commands;                     ///< Enable JSON command processing
-    uint32_t max_json_size;                       ///< Maximum JSON command size
+    uint32_t advertisingInterval;              ///< Advertising interval in milliseconds
+    bool autoStartAdvertising;                   ///< Auto-start advertising on init
+    uint32_t dataUpdateInterval;              ///< Interval for automatic data updates MS
+    uint8_t maxClients;                          ///< Maximum number of simultaneous clients
+    uint32_t clientTimeout;                   ///< Client inactivity timeout mS
+    bool requireAuthentication;                   ///< Require client authentication
+    bool enableNotifications;                     ///< Enable data notifications to clients
+    bool enableJsonCommands;                     ///< Enable JSON command processing
+    uint32_t maxJsonSize;                       ///< Maximum JSON command size
 } ble_server_config_t;
 
 /**
@@ -72,10 +63,10 @@ typedef struct {
  * @brief Information about a connected client session
  */
 typedef struct {
-    uint16_t conn_id;                             ///< Connection ID
+    uint16_t connID;                             ///< Connection ID
     esp_bd_addr_t address;                        ///< Client MAC address
     bool authenticated;                           ///< Authentication status
-    uint64_t connect_time;                        ///< Connection timestamp
+    uint64_t connectTime;                        ///< Connection timestamp
     uint64_t last_activity;                       ///< Last activity timestamp
     uint32_t data_packets_sent;                   ///< Data packets sent to this client
     uint32_t data_packets_received;               ///< Data packets received from this client

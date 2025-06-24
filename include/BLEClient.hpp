@@ -3,7 +3,7 @@
  * @brief Contains declarations for BLE client functionality including scanning,
  * connecting, and data communication with BLE servers.
  *
- * @version 0.0.4
+ * @version 0.0.5
  * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************

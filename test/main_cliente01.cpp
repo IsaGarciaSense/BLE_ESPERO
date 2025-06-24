@@ -27,7 +27,6 @@ extern "C" void app_main() {
     if (client != nullptr) {
         ble_client_config_t config = client->getConfig();
 
-        config.min_rssi = -90; // Ajustar RSSI mínimo
         // config.
         client->setConfig(config);
         client->setMacTarget(MAC_TARGET);
@@ -92,17 +91,17 @@ extern "C" void app_main() {
                 break;
 
             case 3:
-                ESP_LOGI(TAG, "🔄 Second round for scanning devices");
+                ESP_LOGI(TAG, "Second round for scanning devices");
                 client->clearDeviceList(); // Limpiar lista anterior
                 client->startDiscoveryScan(12000); // 12 segundos
                 vTaskDelay(pdMS_TO_TICKS(14000));
                 
-                ESP_LOGI(TAG, "📊 You got:");
+                ESP_LOGI(TAG, "You got:");
                 ESP_LOGI(TAG, "  Devices unique after cleaning: %lu", client->getUniqueDevicesFound());
                 break;
 
             default:
-                ESP_LOGI(TAG, "🔁 Restart demo...");
+                ESP_LOGI(TAG, "Restart demo...");
                 demo_step = 0;
                 vTaskDelay(pdMS_TO_TICKS(5000));
                 break;

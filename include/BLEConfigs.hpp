@@ -3,8 +3,8 @@
  * @brief Contains common declarations for BLE library including security 
  * configuration, states, and shared functionality between client and server.
  *
- * @version 0.0.1
- * @date 2025-06-15
+ * @version 0.0.5
+ * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -30,9 +30,6 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-/******************************************************************************/
-/*                                 Definitions                                */
-/******************************************************************************/
 
 #define BLE_MAX_DEVICE_NAME_LEN     32
 #define BLE_MAX_AUTH_KEY_LEN        32
@@ -43,18 +40,15 @@
 #define BLE_DEFAULT_SCAN_TIMEOUT    10000   // 10 seconds
 #define BLE_DEFAULT_RECONNECT_TIME  5000    // 5 seconds
 
-/******************************************************************************/
-/*                                    Enums                                   */
-/******************************************************************************/
 
 /**
  * @enum ble_mode_t
  * @brief Operating modes for the BLE library
  */
 typedef enum {
-    BLE_MODE_CLIENT_ONLY,   ///< Device acts only as BLE client
-    BLE_MODE_SERVER_ONLY,   ///< Device acts only as BLE server
-    BLE_MODE_DUAL          ///< Device acts as both client and server simultaneously
+    BLE_MODE_CLIENT_ONLY,       ///< Device acts only as BLE client
+    BLE_MODE_SERVER_ONLY,       ///< Device acts only as BLE server
+    BLE_MODE_DUAL               ///< Device acts as both client and server simultaneously
 } ble_mode_t;
 
 /**
@@ -65,8 +59,8 @@ typedef enum {
     BLE_STATE_UNINITIALIZED,    ///< Library not initialized
     BLE_STATE_INITIALIZED,      ///< Library initialized but not started
     BLE_STATE_STARTING,         ///< Library starting up
-    BLE_STATE_READY,           ///< Library ready for operations
-    BLE_STATE_ERROR            ///< Library in error state
+    BLE_STATE_READY,            ///< Library ready for operations
+    BLE_STATE_ERROR             ///< Library in error state
 } ble_state_t;
 
 /**
@@ -74,28 +68,24 @@ typedef enum {
  * @brief Security levels for BLE connections
  */
 typedef enum {
-    BLE_SECURITY_NONE,         ///< No security (name matching only)
-    BLE_SECURITY_BASIC,        ///< UUID verification + name matching
-    BLE_SECURITY_AUTHENTICATED, ///< Basic + authentication key
-    BLE_SECURITY_ENCRYPTED     ///< Authenticated + BLE pairing/bonding
+    BLE_SECURITY_NONE,           ///< No security (name matching only)
+    BLE_SECURITY_BASIC,          ///< UUID verification + name matching
+    BLE_SECURITY_AUTHENTICATED,  ///< Basic + authentication key
+    BLE_SECURITY_ENCRYPTED       ///< Authenticated + BLE pairing/bonding
 } ble_security_level_t;
-
-/******************************************************************************/
-/*                                  Structures                                */
-/******************************************************************************/
 
 /**
  * @struct ble_security_config_t
  * @brief Configuration structure for BLE security settings
  */
 typedef struct {
-    ble_security_level_t level;                         ///< Security level to use
-    bool use_custom_uuids;                             ///< Use custom 128-bit UUIDs
-    bool require_authentication;                        ///< Require authentication key
-    char auth_key[BLE_MAX_AUTH_KEY_LEN];               ///< Authentication key
-    uint8_t service_uuid[BLE_UUID_128_LEN];            ///< Custom service UUID (128-bit)
-    uint8_t battery_char_uuid[BLE_UUID_128_LEN];       ///< Custom battery characteristic UUID
-    uint8_t custom_char_uuid[BLE_UUID_128_LEN];        ///< Custom data characteristic UUID
+    ble_security_level_t level;                        ///< Security level to use
+    bool useCustomUUIDS;                             ///< Use custom 128-bit UUIDs
+    bool requireAuthentication;                       ///< Require authentication key
+    char authKey[BLE_MAX_AUTH_KEY_LEN];               ///< Authentication key
+    uint8_t serviceUUID[BLE_UUID_128_LEN];            ///< Custom service UUID (128-bit)
+    uint8_t batteryCharUUID[BLE_UUID_128_LEN];       ///< Custom battery characteristic UUID
+    uint8_t customCharUUID[BLE_UUID_128_LEN];        ///< Custom data characteristic UUID
 } ble_security_config_t;
 
 /**
@@ -107,7 +97,7 @@ typedef struct {
     char name[BLE_MAX_DEVICE_NAME_LEN];               ///< Device name
     int8_t rssi;                                      ///< Signal strength (dBm)
     bool authenticated;                               ///< Authentication status
-    uint64_t last_seen;                              ///< Last seen timestamp
+    uint64_t lastSeen;                              ///< Last seen timestamp
 } ble_device_info_t;
 
 /**
@@ -115,22 +105,18 @@ typedef struct {
  * @brief Data packet structure for BLE communication
  */
 typedef struct {
-    uint8_t battery_level;                            ///< Battery level (0-100%)
-    char custom_data[BLE_MAX_CUSTOM_DATA_LEN];       ///< Custom data string
-    uint64_t timestamp;                              ///< Data timestamp
-    bool is_valid;                                   ///< Data validity flag
+    uint8_t batteryLevel;                            ///< Battery level (0-100%)
+    char customData[BLE_MAX_CUSTOM_DATA_LEN];       ///< Custom data string
+    uint64_t timeStamp;                              ///< Data timestamp
+    bool valid;                                   ///< Data validity flag
 } ble_data_packet_t;
-
-/******************************************************************************/
-/*                                 Callbacks                                  */
-/******************************************************************************/
 
 /**
  * @brief General event callback function type
- * @param event_type Type of event that occurred
- * @param event_data Pointer to event-specific data
+ * @param eventType Type of event that occurred
+ * @param eventData Pointer to event-specific data
  */
-typedef void (*ble_event_callback_t)(int event_type, void *event_data);
+typedef void (*ble_event_callback_t)(int eventType, void *eventData);
 
 /**
  * @brief Log callback function type for custom logging
@@ -139,10 +125,6 @@ typedef void (*ble_event_callback_t)(int event_type, void *event_data);
  * @param message Log message
  */
 typedef void (*ble_log_callback_t)(esp_log_level_t level, const char* tag, const char* message);
-
-/******************************************************************************/
-/*                              Default Configurations                        */
-/******************************************************************************/
 
 /**
  * @brief Default UUIDs for basic security (16-bit)
@@ -162,10 +144,6 @@ extern const uint8_t BLE_DEFAULT_CUSTOM_CHAR_UUID_128[BLE_UUID_128_LEN];
  * @brief Default authentication key
  */
 #define BLE_DEFAULT_AUTH_KEY "15453n53"
-
-/******************************************************************************/
-/*                                Common Functions                            */
-/******************************************************************************/
 
 /**
  * @brief Initializes the common BLE subsystem
@@ -217,10 +195,10 @@ ble_state_t ble_get_state(void);
 /**
  * @brief Converts a MAC address to string format
  * 
- * @param bda MAC address bytes
+ * @param MACadd MAC address bytes
  * @param str Output string buffer (minimum 18 characters)
  */
-void ble_addr_to_string(esp_bd_addr_t bda, char *str);
+void ble_addr_to_string(esp_bd_addr_t MACadd, char *str);
 
 /**
  * @brief Compares two 128-bit UUIDs
@@ -234,11 +212,11 @@ bool ble_compare_uuid128(const uint8_t* uuid1, const uint8_t* uuid2);
 /**
  * @brief Generates a random authentication key
  * 
- * @param key_buffer Buffer to store the generated key
- * @param key_length Length of the key to generate
+ * @param keyBuffer Buffer to store the generated key
+ * @param keyLength Length of the key to generate
  * @return esp_err_t ESP_OK on success, error code otherwise
  */
-esp_err_t ble_generate_auth_key(char* key_buffer, size_t key_length);
+esp_err_t ble_generate_auth_key(char* keyBuffer, size_t keyLength);
 
 /**
  * @brief Validates BLE device name
@@ -262,10 +240,6 @@ esp_err_t ble_create_default_security_config(ble_security_config_t* config,
  * @brief Prints BLE library version and build information
  */
 void ble_print_version_info(void);
-
-/******************************************************************************/
-/*                                 Utilities                                  */
-/******************************************************************************/
 
 /**
  * @brief Custom logging function with BLE tag

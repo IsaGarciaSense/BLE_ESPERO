@@ -3,8 +3,8 @@
  * @brief Implementation of BLE client functionality including scanning,
  * connecting, and data communication with BLE servers.
  *
- * @version 0.0.1
- * @date 2025-06-15
+ * @version 0.0.5
+ * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -440,7 +440,7 @@ const ble_device_info_t* BLEClient::getConnectedDevice() const {
 }
 
 const ble_data_packet_t* BLEClient::getLastData() const {
-    return lastData_.is_valid ? &lastData_ : nullptr;
+    return lastData_.valid ? &lastData_ : nullptr;
 }
 
 ble_client_stats_t BLEClient::getStats() const {
@@ -730,7 +730,7 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
 
     bool macMatch = (memcmp(scanResult->scan_rst.bda, config_.targetServerMACadd, ESP_BD_ADDR_LEN) == 0);
     
-    if (securityConfig_.use_custom_uuids && scanResult->scan_rst.adv_data_len > 0) {
+    if (securityConfig_.useCustomUUIDS && scanResult->scan_rst.adv_data_len > 0) {
         uint8_t *advData = scanResult->scan_rst.ble_adv;
         uint8_t advDataLen = scanResult->scan_rst.adv_data_len;
 
@@ -741,7 +741,7 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
             uint8_t type = advData[i + 1];
 
             if (type == 0x07 && length == 17) {  // Complete list of 128-bit service UUIDs
-                if (ble_compare_uuid128(&advData[i + 2], securityConfig_.service_uuid)) {
+                if (ble_compare_uuid128(&advData[i + 2], securityConfig_.serviceUUID)) {
                     hasTargetService = true;
                     break;
                 }
@@ -760,7 +760,7 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
         case BLE_SECURITY_BASIC:
         case BLE_SECURITY_AUTHENTICATED:
         case BLE_SECURITY_ENCRYPTED:
-            securityOk = (hasTargetService || !securityConfig_.use_custom_uuids);
+            securityOk = (hasTargetService || !securityConfig_.useCustomUUIDS);
             break;
             
         default:
@@ -789,7 +789,7 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
 }
 
 esp_err_t BLEClient::authenticateWithServer() {
-    if (customCharHandle_ == BLE_INVALID_HANDLE || !securityConfig_.require_authentication) {
+    if (customCharHandle_ == BLE_INVALID_HANDLE || !securityConfig_.requireAuthentication) {
         return ESP_OK;
     }
     
@@ -798,7 +798,7 @@ esp_err_t BLEClient::authenticateWithServer() {
     state_ = BLE_CLIENT_AUTHENTICATING;
     
     // Send authentication key
-    esp_err_t ret = writeCustomData(securityConfig_.auth_key);
+    esp_err_t ret = writeCustomData(securityConfig_.authKey);
     if (ret != ESP_OK) {
         ble_log(ESP_LOG_ERROR, "Failed to send authentication: %s", esp_err_to_name(ret));
         return ret;
@@ -821,7 +821,7 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
             
             memcpy(currentDevice.address, scanResult->scan_rst.bda, ESP_BD_ADDR_LEN);
             currentDevice.rssi = scanResult->scan_rst.rssi;
-            currentDevice.last_seen = ble_get_timestamp();
+            currentDevice.lastSeen = ble_get_timestamp();
             
             char deviceName[BLE_MAX_DEVICE_NAME_LEN] = {0};
             if (scanResult->scan_rst.adv_data_len > 0) {
@@ -964,11 +964,11 @@ void BLEClient::handleServiceFound(esp_ble_gattc_cb_param_t *param) {
     
     // Check if this is our target service
     bool serviceMatch = false;
-    
-    if (securityConfig_.use_custom_uuids && param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_128) {
+
+    if (securityConfig_.useCustomUUIDS && param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_128) {
         serviceMatch = ble_compare_uuid128(param->search_res.srvc_id.uuid.uuid.uuid128, 
-                                          securityConfig_.service_uuid);
-    } else if (!securityConfig_.use_custom_uuids && param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_16) {
+                                          securityConfig_.serviceUUID);
+    } else if (!securityConfig_.useCustomUUIDS && param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_16) {
         serviceMatch = (param->search_res.srvc_id.uuid.uuid.uuid16 == BLE_DEFAULT_SERVICE_UUID_16);
     }
     
@@ -1001,12 +1001,12 @@ void BLEClient::handleServiceDiscoveryComplete(esp_ble_gattc_cb_param_t *param) 
                 
                 bool isBattery = false;
                 bool isCustom = false;
-                if (securityConfig_.use_custom_uuids && char_elem->uuid.len == ESP_UUID_LEN_128) {
+                if (securityConfig_.useCustomUUIDS && char_elem->uuid.len == ESP_UUID_LEN_128) {
                     isBattery = ble_compare_uuid128(char_elem->uuid.uuid.uuid128, 
-                                                   securityConfig_.battery_char_uuid);
+                                                   securityConfig_.batteryCharUUID);
                     isCustom = ble_compare_uuid128(char_elem->uuid.uuid.uuid128, 
-                                                  securityConfig_.custom_char_uuid);
-                } else if (!securityConfig_.use_custom_uuids && char_elem->uuid.len == ESP_UUID_LEN_16) {
+                                                  securityConfig_.customCharUUID);
+                } else if (!securityConfig_.useCustomUUIDS && char_elem->uuid.len == ESP_UUID_LEN_16) {
                     isBattery = (char_elem->uuid.uuid.uuid16 == BLE_DEFAULT_BATTERY_CHAR_UUID);
                     isCustom = (char_elem->uuid.uuid.uuid16 == BLE_DEFAULT_CUSTOM_CHAR_UUID);
                 }
@@ -1020,7 +1020,7 @@ void BLEClient::handleServiceDiscoveryComplete(esp_ble_gattc_cb_param_t *param) 
                 }
             }
             
-            if (securityConfig_.require_authentication) {
+            if (securityConfig_.requireAuthentication) {
                 authenticateWithServer();
             } else {
                 state_ = BLE_CLIENT_READY;
@@ -1060,17 +1060,17 @@ void BLEClient::handleCharacteristicRead(esp_ble_gattc_cb_param_t *param) {
     lastDataTime_ = ble_get_timestamp();
 
     if (param->read.handle == batteryCharHandle_) {
-        lastData_.battery_level = param->read.value[0];
-        ble_log(ESP_LOG_INFO, "Battery level: %d%%", lastData_.battery_level);
+        lastData_.batteryLevel = param->read.value[0];
+        ble_log(ESP_LOG_INFO, "Battery level: %d%%", lastData_.batteryLevel);
     } else if (param->read.handle == customCharHandle_) {
-        memcpy(lastData_.custom_data, param->read.value, 
+        memcpy(lastData_.customData, param->read.value, 
                param->read.value_len < BLE_MAX_CUSTOM_DATA_LEN ? param->read.value_len : BLE_MAX_CUSTOM_DATA_LEN - 1);
-        lastData_.custom_data[param->read.value_len] = '\0';
-        ble_log(ESP_LOG_INFO, "Custom data: %s", lastData_.custom_data);
+        lastData_.customData[param->read.value_len] = '\0';
+        ble_log(ESP_LOG_INFO, "Custom data: %s", lastData_.customData);
     }
 
-    lastData_.timestamp = ble_get_timestamp();
-    lastData_.is_valid = true;
+    lastData_.timeStamp = ble_get_timestamp();
+    lastData_.valid = true;
 
     if (dataReceivedCB_ != nullptr) {
         dataReceivedCB_(&lastData_);
@@ -1098,15 +1098,15 @@ void BLEClient::handleNotification(esp_ble_gattc_cb_param_t *param) {
     lastDataTime_ = ble_get_timestamp();
 
     if (param->notify.handle == batteryCharHandle_) {
-        lastData_.battery_level = param->notify.value[0];
-        ble_log(ESP_LOG_INFO, "Battery notification: %d%%", lastData_.battery_level);
+        lastData_.batteryLevel = param->notify.value[0];
+        ble_log(ESP_LOG_INFO, "Battery notification: %d%%", lastData_.batteryLevel);
     } else if (param->notify.handle == customCharHandle_) {
-        memcpy(lastData_.custom_data, param->notify.value,
+        memcpy(lastData_.customData, param->notify.value,
                param->notify.value_len < BLE_MAX_CUSTOM_DATA_LEN ? param->notify.value_len : BLE_MAX_CUSTOM_DATA_LEN - 1);
-        lastData_.custom_data[param->notify.value_len] = '\0';
-        ble_log(ESP_LOG_INFO, "Custom notification: %s", lastData_.custom_data);
+        lastData_.customData[param->notify.value_len] = '\0';
+        ble_log(ESP_LOG_INFO, "Custom notification: %s", lastData_.customData);
 
-        if (state_ == BLE_CLIENT_AUTHENTICATING && strcmp(lastData_.custom_data, "AUTH_OK") == 0) {
+        if (state_ == BLE_CLIENT_AUTHENTICATING && strcmp(lastData_.customData, "AUTH_OK") == 0) {
             ble_log(ESP_LOG_INFO, "Authentication successful");
             state_ = BLE_CLIENT_READY;
 
@@ -1124,8 +1124,8 @@ void BLEClient::handleNotification(esp_ble_gattc_cb_param_t *param) {
         }
     }
 
-    lastData_.timestamp = ble_get_timestamp();
-    lastData_.is_valid = true;
+    lastData_.timeStamp = ble_get_timestamp();
+    lastData_.valid = true;
 
     if (dataReceivedCB_ != nullptr) {
         dataReceivedCB_(&lastData_);
