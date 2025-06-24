@@ -23,33 +23,33 @@
 
 BLELibrary::BLELibrary()
     : state_(BLE_STATE_UNINITIALIZED)
-    , last_error_(ESP_OK)
+    , lastError_(ESP_OK)
     , client_(nullptr)
     , server_(nullptr)
-    , client_initialized_(false)
-    , server_initialized_(false)
-    , common_initialized_(false)
-    , init_time_(0)
-    , start_time_(0)
-    , event_callback_(nullptr)
-    , log_callback_(nullptr)
-    , state_mutex_(nullptr)
-    , watchdog_task_handle_(nullptr)
-    , restart_count_(0)
-    , total_uptime_(0) {
+    , clientInitialized_(false)
+    , serverInitialized_(false)
+    , commonInitialized_(false)
+    , initTime_(0)
+    , startTime_(0)
+    , eventCallback_(nullptr)
+    , logCallback_(nullptr)
+    , stateMutex_(nullptr)
+    , watchdogTaskHandle_(nullptr)
+    , restartCount_(0)
+    , totalUpTime_(0) {
     
     // Initialize default configuration
     memset(&config_, 0, sizeof(config_));
     config_.mode = BLE_MODE_CLIENT_ONLY;
-    strncpy(config_.device_name, "ESP32_BLE_Device", BLE_MAX_DEVICE_NAME_LEN - 1);
+    strncpy(config_.deviceName, "ESP32_BLE_Device", BLE_MAX_DEVICE_NAME_LEN - 1);
     ble_create_default_security_config(&config_.security, BLE_SECURITY_AUTHENTICATED);
-    config_.enable_logging = true;
-    config_.log_level = ESP_LOG_INFO;
-    config_.auto_start = true;
-    config_.watchdog_timeout_ms = 30000;
+    config_.enableLogging = true;
+    config_.logLevel = ESP_LOG_INFO;
+    config_.autoStart = true;
+    config_.watchdogTimeOut = 30000;
 
     // Create mutex
-    state_mutex_ = xSemaphoreCreateMutex();
+    stateMutex_ = xSemaphoreCreateMutex();
 
     ble_log(ESP_LOG_INFO, "BLE Library created");
 }
@@ -63,16 +63,16 @@ BLELibrary::~BLELibrary() {
     ble_log(ESP_LOG_INFO, "Destroying BLE Library");
 
     // Stop watchdog task
-    if (watchdog_task_handle_ != nullptr) {
-        vTaskDelete(watchdog_task_handle_);
+    if (watchdogTaskHandle_ != nullptr) {
+        vTaskDelete(watchdogTaskHandle_);
     }
 
     // Deinitialize library
     deinit();
 
     // Clean up mutex
-    if (state_mutex_ != nullptr) {
-        vSemaphoreDelete(state_mutex_);
+    if (stateMutex_ != nullptr) {
+        vSemaphoreDelete(stateMutex_);
     }
 }
 
@@ -83,7 +83,7 @@ BLELibrary::~BLELibrary() {
 esp_err_t BLELibrary::init() {
     ble_log(ESP_LOG_INFO, "Initializing BLE Library");
 
-    if (xSemaphoreTake(state_mutex_, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(5000)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
@@ -91,24 +91,24 @@ esp_err_t BLELibrary::init() {
 
     if (state_ != BLE_STATE_UNINITIALIZED) {
         ble_log(ESP_LOG_WARN, "Library already initialized");
-        xSemaphoreGive(state_mutex_);
+        xSemaphoreGive(stateMutex_);
         return ESP_ERR_INVALID_STATE;
     }
 
     state_ = BLE_STATE_STARTING;
-    init_time_ = ble_get_timestamp();
+    initTime_ = ble_get_timestamp();
 
     // Initialize common BLE subsystem
-    if (!common_initialized_) {
+    if (!commonInitialized_) {
         ret = ble_common_init();
         if (ret != ESP_OK) {
             ble_log(ESP_LOG_ERROR, "Failed to initialize BLE common: %s", esp_err_to_name(ret));
             state_ = BLE_STATE_ERROR;
-            last_error_ = ret;
-            xSemaphoreGive(state_mutex_);
+            lastError_ = ret;
+            xSemaphoreGive(stateMutex_);
             return ret;
         }
-        common_initialized_ = true;
+        commonInitialized_ = true;
     }
 
     // Initialize modules based on mode
@@ -136,25 +136,25 @@ esp_err_t BLELibrary::init() {
     if (ret != ESP_OK) {
         ble_log(ESP_LOG_ERROR, "Failed to initialize modules: %s", esp_err_to_name(ret));
         state_ = BLE_STATE_ERROR;
-        last_error_ = ret;
-        xSemaphoreGive(state_mutex_);
+        lastError_ = ret;
+        xSemaphoreGive(stateMutex_);
         return ret;
     }
 
     state_ = BLE_STATE_INITIALIZED;
 
     // Start watchdog task
-    if (config_.watchdog_timeout_ms > 0) {
-        xTaskCreate(watchdogTask, "ble_watchdog", 4096, this, 2, &watchdog_task_handle_);
+    if (config_.watchdogTimeOut > 0) {
+        xTaskCreate(watchdogTask, "ble_watchdog", 4096, this, 2, &watchdogTaskHandle_);
     }
 
-    xSemaphoreGive(state_mutex_);
+    xSemaphoreGive(stateMutex_);
 
     ble_log(ESP_LOG_INFO, "BLE Library initialized successfully in %s mode", 
             getModeString(config_.mode));
 
     // Auto-start if configured
-    if (config_.auto_start) {
+    if (config_.autoStart) {
         ret = start();
     }
 
@@ -169,12 +169,12 @@ esp_err_t BLELibrary::start() {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (xSemaphoreTake(state_mutex_, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(5000)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
     esp_err_t ret = ESP_OK;
-    start_time_ = ble_get_timestamp();
+    startTime_ = ble_get_timestamp();
 
     // Start services based on mode
     switch (config_.mode) {
@@ -210,10 +210,10 @@ esp_err_t BLELibrary::start() {
         ble_log(ESP_LOG_INFO, "BLE Library services started successfully");
     } else {
         ble_log(ESP_LOG_ERROR, "Failed to start services: %s", esp_err_to_name(ret));
-        last_error_ = ret;
+        lastError_ = ret;
     }
 
-    xSemaphoreGive(state_mutex_);
+    xSemaphoreGive(stateMutex_);
     return ret;
 }
 
@@ -225,16 +225,16 @@ esp_err_t BLELibrary::stop() {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (xSemaphoreTake(state_mutex_, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(5000)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
     esp_err_t ret = ESP_OK;
 
     // Update uptime
-    if (start_time_ > 0) {
-        total_uptime_ += (ble_get_timestamp() - start_time_) / 1000;
-        start_time_ = 0;
+    if (startTime_ > 0) {
+        totalUpTime_ += (ble_get_timestamp() - startTime_) / 1000;
+        startTime_ = 0;
     }
 
     // Stop services
@@ -257,8 +257,8 @@ esp_err_t BLELibrary::stop() {
     }
 
     state_ = BLE_STATE_INITIALIZED;
-    
-    xSemaphoreGive(state_mutex_);
+
+    xSemaphoreGive(stateMutex_);
 
     ble_log(ESP_LOG_INFO, "BLE Library services stopped");
     return ret;
@@ -276,21 +276,21 @@ esp_err_t BLELibrary::deinit() {
         stop();
     }
 
-    if (xSemaphoreTake(state_mutex_, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(5000)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
     esp_err_t ret = ESP_OK;
 
     // Deinitialize modules
-    if (client_initialized_) {
+    if (clientInitialized_) {
         ret = deinitClient();
         if (ret != ESP_OK) {
             ble_log(ESP_LOG_WARN, "Failed to deinitialize client: %s", esp_err_to_name(ret));
         }
     }
 
-    if (server_initialized_) {
+    if (serverInitialized_) {
         ret = deinitServer();
         if (ret != ESP_OK) {
             ble_log(ESP_LOG_WARN, "Failed to deinitialize server: %s", esp_err_to_name(ret));
@@ -298,17 +298,17 @@ esp_err_t BLELibrary::deinit() {
     }
 
     // Deinitialize common BLE subsystem
-    if (common_initialized_) {
+    if (commonInitialized_) {
         ret = ble_common_deinit();
         if (ret != ESP_OK) {
             ble_log(ESP_LOG_WARN, "Failed to deinitialize BLE common: %s", esp_err_to_name(ret));
         }
-        common_initialized_ = false;
+        commonInitialized_ = false;
     }
 
     state_ = BLE_STATE_UNINITIALIZED;
-    
-    xSemaphoreGive(state_mutex_);
+
+    xSemaphoreGive(stateMutex_);
 
     ble_log(ESP_LOG_INFO, "BLE Library deinitialized");
     return ret;
@@ -322,7 +322,7 @@ esp_err_t BLELibrary::restart() {
         vTaskDelay(pdMS_TO_TICKS(1000));  // Wait 1 second
         ret = start();
         if (ret == ESP_OK) {
-            restart_count_++;
+            restartCount_++;
         }
     }
 
@@ -363,21 +363,21 @@ esp_err_t BLELibrary::setMode(ble_mode_t mode) {
     return ESP_OK;
 }
 
-esp_err_t BLELibrary::setDeviceName(const char* device_name) {
-    if (device_name == nullptr || !ble_validate_device_name(device_name)) {
+esp_err_t BLELibrary::setDeviceName(const char* deviceName) {
+    if (deviceName == nullptr || !ble_validate_device_name(deviceName)) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    strncpy(config_.device_name, device_name, BLE_MAX_DEVICE_NAME_LEN - 1);
-    config_.device_name[BLE_MAX_DEVICE_NAME_LEN - 1] = '\0';
+    strncpy(config_.deviceName, deviceName, BLE_MAX_DEVICE_NAME_LEN - 1);
+    config_.deviceName[BLE_MAX_DEVICE_NAME_LEN - 1] = '\0';
     
-    ble_log(ESP_LOG_INFO, "Device name set to: %s", config_.device_name);
+    ble_log(ESP_LOG_INFO, "Device name set to: %s", config_.deviceName);
     return ESP_OK;
 }
 
-esp_err_t BLELibrary::setSecurityConfig(const ble_security_config_t& security_config) {
-    config_.security = security_config;
-    
+esp_err_t BLELibrary::setSecurityConfig(const ble_security_config_t& securityConfig) {
+    config_.security = securityConfig;
+
     // Update client and server security configs if they exist
     if (client_ != nullptr) {
         // Note: This would require adding a setSecurityConfig method to BLEClient
@@ -404,13 +404,13 @@ BLEClient* BLELibrary::getClient() {
     return client_;
 }
 
-esp_err_t BLELibrary::setClientConfig(const ble_client_config_t& client_config) {
+esp_err_t BLELibrary::setClientConfig(const ble_client_config_t& clientConfig) {
     if (config_.mode == BLE_MODE_SERVER_ONLY) {
         return ESP_ERR_INVALID_STATE;
     }
 
     if (client_ != nullptr) {
-        return client_->setConfig(client_config);
+        return client_->setConfig(clientConfig);
     }
 
     ble_log(ESP_LOG_WARN, "Client not initialized");
@@ -425,12 +425,12 @@ esp_err_t BLELibrary::startClientScan() {
     return client_->startScan();
 }
 
-esp_err_t BLELibrary::connectToServer(const esp_bd_addr_t server_address) {
+esp_err_t BLELibrary::connectToServer(const esp_bd_addr_t serverMACadd) {
     if (config_.mode == BLE_MODE_SERVER_ONLY || client_ == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    return client_->connect(server_address);
+    return client_->connect(serverMACadd);
 }
 
 /******************************************************************************/
@@ -444,13 +444,13 @@ BLEServer* BLELibrary::getServer() {
     return server_;
 }
 
-esp_err_t BLELibrary::setServerConfig(const ble_server_config_t& server_config) {
+esp_err_t BLELibrary::setServerConfig(const ble_server_config_t& serverConfig) {
     if (config_.mode == BLE_MODE_CLIENT_ONLY) {
         return ESP_ERR_INVALID_STATE;
     }
 
     if (server_ != nullptr) {
-        return server_->setConfig(server_config);
+        return server_->setConfig(serverConfig);
     }
 
     ble_log(ESP_LOG_WARN, "Server not initialized");
@@ -465,14 +465,14 @@ esp_err_t BLELibrary::startServerAdvertising() {
     return server_->startAdvertising();
 }
 
-esp_err_t BLELibrary::updateServerData(uint8_t battery_level, const char* custom_data) {
+esp_err_t BLELibrary::updateServerData(uint8_t batteryLevel, const char* customData) {
     if (config_.mode == BLE_MODE_CLIENT_ONLY || server_ == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t ret = server_->setBatteryLevel(battery_level);
-    if (ret == ESP_OK && custom_data != nullptr) {
-        ret = server_->setCustomData(custom_data);
+    esp_err_t ret = server_->setBatteryLevel(batteryLevel);
+    if (ret == ESP_OK && customData != nullptr) {
+        ret = server_->setCustomData(customData);
     }
 
     return ret;
@@ -499,37 +499,37 @@ bool BLELibrary::isRunning() const {
 }
 
 bool BLELibrary::isClientActive() const {
-    return client_initialized_ && client_ != nullptr;
+    return clientInitialized_ && client_ != nullptr;
 }
 
 bool BLELibrary::isServerActive() const {
-    return server_initialized_ && server_ != nullptr;
+    return serverInitialized_ && server_ != nullptr;
 }
 
 ble_library_status_t BLELibrary::getStatus() const {
     ble_library_status_t status;
     memset(&status, 0, sizeof(status));
+
+    status.libraryState = state_;
+    status.operatingMode = config_.mode;
+    status.clientActive = isClientActive();
+    status.serverActive = isServerActive();
     
-    status.library_state = state_;
-    status.operating_mode = config_.mode;
-    status.client_active = isClientActive();
-    status.server_active = isServerActive();
-    
-    if (init_time_ > 0) {
-        status.library_uptime_ms = (ble_get_timestamp() - init_time_) / 1000;
+    if (initTime_ > 0) {
+        status.libraryUptime = (ble_get_timestamp() - initTime_) / 1000;
     }
     
-    status.free_heap_size = esp_get_free_heap_size();
-    status.minimum_free_heap = esp_get_minimum_free_heap_size();
-    status.last_error = last_error_;
-    
-    strncpy(status.version_string, getVersion(), sizeof(status.version_string) - 1);
-    
+    status.freeHeapSize = esp_get_free_heap_size();
+    status.minimumFreeHeap = esp_get_minimum_free_heap_size();
+    status.lastError = lastError_;
+
+    strncpy(status.versionString, getVersion(), sizeof(status.versionString) - 1);
+
     return status;
 }
 
 esp_err_t BLELibrary::getLastError() const {
-    return last_error_;
+    return lastError_;
 }
 
 /******************************************************************************/
@@ -537,11 +537,11 @@ esp_err_t BLELibrary::getLastError() const {
 /******************************************************************************/
 
 const char* BLELibrary::getVersion() {
-    return "0.0.1";  // Versión simple sin constantes adicionales
+    return "0.0.6";  // actual version of the library
 }
 
 const char* BLELibrary::getBuildInfo() {
-    return __DATE__ " " __TIME__;  // Información básica de compilación
+    return __DATE__ " " __TIME__;  // Basic build information
 }
 
 void BLELibrary::printLibraryInfo() {
@@ -553,12 +553,12 @@ void BLELibrary::printLibraryInfo() {
 
 uint64_t BLELibrary::getUptime() const {
     uint64_t current_uptime = 0;
-    
-    if (start_time_ > 0) {
-        current_uptime = (ble_get_timestamp() - start_time_) / 1000;
+
+    if (startTime_ > 0) {
+        current_uptime = (ble_get_timestamp() - startTime_) / 1000;
     }
-    
-    return total_uptime_ + current_uptime;
+
+    return totalUpTime_ + current_uptime;
 }
 
 bool BLELibrary::performHealthCheck() {
@@ -591,30 +591,30 @@ bool BLELibrary::performHealthCheck() {
     return healthy;
 }
 
-void BLELibrary::getMemoryStats(uint32_t* free_heap, uint32_t* min_free_heap, uint32_t* largest_block) const {
-    if (free_heap != nullptr) {
-        *free_heap = esp_get_free_heap_size();
+void BLELibrary::getMemoryStats(uint32_t* freeHeap, uint32_t* minFreeHeap, uint32_t* largest_free_block) const {
+    if (freeHeap != nullptr) {
+        *freeHeap = esp_get_free_heap_size();
     }
-    if (min_free_heap != nullptr) {
-        *min_free_heap = esp_get_minimum_free_heap_size();
+    if (minFreeHeap != nullptr) {
+        *minFreeHeap = esp_get_minimum_free_heap_size();
     }
-    if (largest_block != nullptr) {
+    if (largest_free_block != nullptr) {
         multi_heap_info_t info;
         heap_caps_get_info(&info, MALLOC_CAP_DEFAULT);
-        *largest_block = info.largest_free_block;
+        *largest_free_block = info.largest_free_block;
     }
 }
 
-esp_err_t BLELibrary::generateStatusReport(char* buffer, size_t buffer_size) const {
-    if (buffer == nullptr || buffer_size == 0) {
+esp_err_t BLELibrary::generateStatusReport(char* buffer, size_t bufferSize) const {
+    if (buffer == nullptr || bufferSize == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
     ble_library_status_t status = getStatus();
-    uint32_t free_heap, min_free_heap, largest_block;
-    getMemoryStats(&free_heap, &min_free_heap, &largest_block);
+    uint32_t freeHeap, minFreeHeap, largestBlock;
+    getMemoryStats(&freeHeap, &minFreeHeap, &largestBlock);
 
-    int written = snprintf(buffer, buffer_size,
+    int written = snprintf(buffer, bufferSize,
         "=== BLE Library Status Report ===\n"
         "Version: %s\n"
         "State: %s\n"
@@ -627,23 +627,23 @@ esp_err_t BLELibrary::generateStatusReport(char* buffer, size_t buffer_size) con
         "Min Free Heap: %lu bytes\n"
         "Largest Block: %lu bytes\n"
         "Last Error: %s\n",
-        status.version_string,
-        getStateString(status.library_state),
-        getModeString(status.operating_mode),
+        status.versionString,
+        getStateString(status.libraryState),
+        getModeString(status.operatingMode),
         getUptime(),
-        restart_count_,
-        status.client_active ? "YES" : "NO",
-        status.server_active ? "YES" : "NO",
-        free_heap,
-        min_free_heap,
-        largest_block,
-        esp_err_to_name(status.last_error)
+        restartCount_,
+        status.clientActive ? "YES" : "NO",
+        status.serverActive ? "YES" : "NO",
+        freeHeap,
+        minFreeHeap,
+        largestBlock,
+        esp_err_to_name(status.lastError)
     );
 
     // Add client status if active
-    if (client_ != nullptr && written < (int)buffer_size - 100) {
+    if (client_ != nullptr && written < (int)bufferSize - 100) {
         ble_client_stats_t client_stats = client_->getStats();
-        written += snprintf(buffer + written, buffer_size - written,
+        written += snprintf(buffer + written, bufferSize - written,
             "--- Client Stats ---\n"
             "State: %s\n"
             "Connected: %s\n"
@@ -659,9 +659,9 @@ esp_err_t BLELibrary::generateStatusReport(char* buffer, size_t buffer_size) con
     }
 
     // Add server status if active
-    if (server_ != nullptr && written < (int)buffer_size - 100) {
+    if (server_ != nullptr && written < (int)bufferSize - 100) {
         ble_server_stats_t server_stats = server_->getStats();
-        written += snprintf(buffer + written, buffer_size - written,
+        written += snprintf(buffer + written, bufferSize - written,
             "--- Server Stats ---\n"
             "State: %s\n"
             "Advertising: %s\n"
@@ -676,12 +676,12 @@ esp_err_t BLELibrary::generateStatusReport(char* buffer, size_t buffer_size) con
         );
     }
 
-    if (written < (int)buffer_size - 50) {
-        written += snprintf(buffer + written, buffer_size - written,
+    if (written < (int)bufferSize - 50) {
+        written += snprintf(buffer + written, bufferSize - written,
             "===============================\n");
     }
 
-    return (written > 0 && written < (int)buffer_size) ? ESP_OK : ESP_ERR_NO_MEM;
+    return (written > 0 && written < (int)bufferSize) ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 void BLELibrary::resetAllStats() {
@@ -692,10 +692,10 @@ void BLELibrary::resetAllStats() {
         server_->resetStats();
     }
     
-    restart_count_ = 0;
-    total_uptime_ = 0;
-    last_error_ = ESP_OK;
-    
+    restartCount_ = 0;
+    totalUpTime_ = 0;
+    lastError_ = ESP_OK;
+
     ble_log(ESP_LOG_INFO, "All statistics reset");
 }
 
@@ -704,12 +704,12 @@ void BLELibrary::resetAllStats() {
 /******************************************************************************/
 
 void BLELibrary::setEventCallback(ble_event_callback_t callback) {
-    event_callback_ = callback;
+    eventCallback_ = callback;
     ble_log(ESP_LOG_DEBUG, "Event callback registered");
 }
 
 void BLELibrary::setLogCallback(ble_log_callback_t callback) {
-    log_callback_ = callback;
+    logCallback_ = callback;
     ble_set_log_callback(callback);
     ble_log(ESP_LOG_DEBUG, "Log callback registered");
 }
@@ -726,12 +726,12 @@ esp_err_t BLELibrary::createDefaultConfig(ble_library_config_t* config, ble_mode
     memset(config, 0, sizeof(ble_library_config_t));
     
     config->mode = mode;
-    strncpy(config->device_name, "ESP32_BLE_Device", BLE_MAX_DEVICE_NAME_LEN - 1);
+    strncpy(config->deviceName, "ESP32_BLE_Device", BLE_MAX_DEVICE_NAME_LEN - 1);
     ble_create_default_security_config(&config->security, BLE_SECURITY_AUTHENTICATED);
-    config->enable_logging = true;
-    config->log_level = ESP_LOG_INFO;
-    config->auto_start = true;
-    config->watchdog_timeout_ms = 30000;
+    config->enableLogging = true;
+    config->logLevel = ESP_LOG_INFO;
+    config->autoStart = true;
+    config->watchdogTimeOut = 30000;
 
     return ESP_OK;
 }
@@ -747,12 +747,12 @@ bool BLELibrary::validateConfig(const ble_library_config_t* config) {
     }
 
     // Validate device name
-    if (!ble_validate_device_name(config->device_name)) {
+    if (!ble_validate_device_name(config->deviceName)) {
         return false;
     }
 
     // Validate timeouts
-    if (config->watchdog_timeout_ms > 0 && config->watchdog_timeout_ms < 1000) {
+    if (config->watchdogTimeOut > 0 && config->watchdogTimeOut < 1000) {
         return false;  // Minimum 1 second
     }
 
@@ -784,7 +784,7 @@ const char* BLELibrary::getStateString(ble_state_t state) {
 /******************************************************************************/
 
 esp_err_t BLELibrary::initClient() {
-    if (client_initialized_) {
+    if (clientInitialized_) {
         return ESP_OK;
     }
 
@@ -796,18 +796,18 @@ esp_err_t BLELibrary::initClient() {
     }
 
     // Configure client with default settings
-    ble_client_config_t client_config;
-    memset(&client_config, 0, sizeof(client_config));
-    strncpy(client_config.target_device_name, "ESP32_BLE_Server", BLE_MAX_DEVICE_NAME_LEN - 1);
-    client_config.scan_timeout_ms = 10000;
-    client_config.min_rssi = -90;
-    client_config.auto_reconnect = true;
-    client_config.reconnect_interval_ms = 5000;
-    client_config.connection_timeout_ms = 10000;
-    client_config.enable_notifications = true;
-    client_config.read_interval_ms = 5000;
+    ble_client_config_t clientConfig;
+    memset(&clientConfig, 0, sizeof(clientConfig));
+    strncpy(clientConfig.target_device_name, "ESP32_BLE_Server", BLE_MAX_DEVICE_NAME_LEN - 1);
+    clientConfig.scan_timeout_ms = 10000;
+    clientConfig.min_rssi = -90;
+    clientConfig.auto_reconnect = true;
+    clientConfig.reconnect_interval_ms = 5000;
+    clientConfig.connection_timeout_ms = 10000;
+    clientConfig.enable_notifications = true;
+    clientConfig.read_interval_ms = 5000;
 
-    client_->setConfig(client_config);
+    client_->setConfig(clientConfig);
 
     esp_err_t ret = client_->init();
     if (ret != ESP_OK) {
@@ -816,13 +816,13 @@ esp_err_t BLELibrary::initClient() {
         return ret;
     }
 
-    client_initialized_ = true;
+    clientInitialized_ = true;
     ble_log(ESP_LOG_INFO, "BLE Client module initialized");
     return ESP_OK;
 }
 
 esp_err_t BLELibrary::initServer() {
-    if (server_initialized_) {
+    if (serverInitialized_) {
         return ESP_OK;
     }
 
@@ -834,19 +834,19 @@ esp_err_t BLELibrary::initServer() {
     }
 
     // Configure server with library device name
-    ble_server_config_t server_config;
-    memset(&server_config, 0, sizeof(server_config));
-    strncpy(server_config.device_name, config_.device_name, BLE_MAX_DEVICE_NAME_LEN - 1);
-    server_config.advertising_interval_ms = 100;
-    server_config.auto_start_advertising = false;  // We'll start manually
-    server_config.data_update_interval_ms = 5000;
-    server_config.simulate_battery_drain = true;
-    server_config.max_clients = 4;
-    server_config.client_timeout_ms = 30000;
-    server_config.require_authentication = config_.security.require_authentication;
-    server_config.enable_notifications = true;
+    ble_server_config_t serverConfig;
+    memset(&serverConfig, 0, sizeof(serverConfig));
+    strncpy(serverConfig.deviceName, config_.deviceName, BLE_MAX_DEVICE_NAME_LEN - 1);
+    serverConfig.advertising_interval_ms = 100;
+    serverConfig.auto_start_advertising = false;  // We'll start manually
+    serverConfig.data_update_interval_ms = 5000;
+    serverConfig.simulate_battery_drain = true;
+    serverConfig.max_clients = 4;
+    serverConfig.client_timeout_ms = 30000;
+    serverConfig.require_authentication = config_.security.require_authentication;
+    serverConfig.enable_notifications = true;
 
-    server_->setConfig(server_config);
+    server_->setConfig(serverConfig);
 
     esp_err_t ret = server_->init();
     if (ret != ESP_OK) {
@@ -855,13 +855,13 @@ esp_err_t BLELibrary::initServer() {
         return ret;
     }
 
-    server_initialized_ = true;
+    serverInitialized_ = true;
     ble_log(ESP_LOG_INFO, "BLE Server module initialized");
     return ESP_OK;
 }
 
 esp_err_t BLELibrary::deinitClient() {
-    if (!client_initialized_ || client_ == nullptr) {
+    if (!clientInitialized_ || client_ == nullptr) {
         return ESP_OK;
     }
 
@@ -869,13 +869,13 @@ esp_err_t BLELibrary::deinitClient() {
 
     delete client_;
     client_ = nullptr;
-    client_initialized_ = false;
+    clientInitialized_ = false;
 
     return ESP_OK;
 }
 
 esp_err_t BLELibrary::deinitServer() {
-    if (!server_initialized_ || server_ == nullptr) {
+    if (!serverInitialized_ || server_ == nullptr) {
         return ESP_OK;
     }
 
@@ -883,13 +883,9 @@ esp_err_t BLELibrary::deinitServer() {
 
     delete server_;
     server_ = nullptr;
-    server_initialized_ = false;
+    serverInitialized_ = false;
 
     return ESP_OK;
-}
-
-void BLELibrary::updateStats() {
-    // Update any library-level statistics here
 }
 
 void BLELibrary::watchdogTask(void *pvParameters) {
@@ -898,8 +894,8 @@ void BLELibrary::watchdogTask(void *pvParameters) {
     ble_log(ESP_LOG_INFO, "BLE Library watchdog task started");
     
     while (library->isInitialized()) {
-        vTaskDelay(pdMS_TO_TICKS(library->config_.watchdog_timeout_ms));
-        
+        vTaskDelay(pdMS_TO_TICKS(library->config_.watchdogTimeOut));
+
         if (!library->performHealthCheck()) {
             ble_log(ESP_LOG_ERROR, "Health check failed, triggering restart");
             library->restart();
@@ -907,21 +903,21 @@ void BLELibrary::watchdogTask(void *pvParameters) {
     }
     
     ble_log(ESP_LOG_INFO, "BLE Library watchdog task ended");
-    library->watchdog_task_handle_ = nullptr;
+    library->watchdogTaskHandle_ = nullptr;
     vTaskDelete(nullptr);
 }
 
-void BLELibrary::handleClientEvent(int event_type, void* event_data) {
+void BLELibrary::handleClientEvent(int eventType, void* eventData) {
     // Handle client events and forward to global callback if needed
-    if (event_callback_ != nullptr) {
-        event_callback_(event_type, event_data);
+    if (eventCallback_ != nullptr) {
+        eventCallback_(eventType, eventData);
     }
 }
 
-void BLELibrary::handleServerEvent(int event_type, void* event_data) {
+void BLELibrary::handleServerEvent(int eventType, void* eventData) {
     // Handle server events and forward to global callback if needed
-    if (event_callback_ != nullptr) {
-        event_callback_(event_type, event_data);
+    if (eventCallback_ != nullptr) {
+        eventCallback_(eventType, eventData);
     }
 }
 
@@ -929,36 +925,36 @@ void BLELibrary::handleServerEvent(int event_type, void* event_data) {
 /*                              Convenience Functions                         */
 /******************************************************************************/
 
-BLELibrary* createBLEClient(const char* device_name, const char* target_server) {
+BLELibrary* createBLEClient(const char* deviceName, const char* targetServer) {
     ble_library_config_t config;
     BLELibrary::createDefaultConfig(&config, BLE_MODE_CLIENT_ONLY);
-    
-    if (device_name != nullptr) {
-        strncpy(config.device_name, device_name, BLE_MAX_DEVICE_NAME_LEN - 1);
+
+    if (deviceName != nullptr) {
+        strncpy(config.deviceName, deviceName, BLE_MAX_DEVICE_NAME_LEN - 1);
     }
     
     BLELibrary* library = new BLELibrary(config);
-    if (library != nullptr && target_server != nullptr) {
-        ble_client_config_t client_config;
-        memset(&client_config, 0, sizeof(client_config));
-        strncpy(client_config.target_device_name, target_server, BLE_MAX_DEVICE_NAME_LEN - 1);
-        client_config.scan_timeout_ms = 10000;
-        client_config.auto_reconnect = true;
-        
+    if (library != nullptr && targetServer != nullptr) {
+        ble_client_config_t clientConfig;
+        memset(&clientConfig, 0, sizeof(clientConfig));
+        strncpy(clientConfig.target_device_name, targetServer, BLE_MAX_DEVICE_NAME_LEN - 1);
+        clientConfig.scan_timeout_ms = 10000;
+        clientConfig.auto_reconnect = true;
+
         if (library->init() == ESP_OK) {
-            library->setClientConfig(client_config);
+            library->setClientConfig(clientConfig);
         }
     }
     
     return library;
 }
 
-BLELibrary* createBLEServer(const char* device_name) {
+BLELibrary* createBLEServer(const char* deviceName) {
     ble_library_config_t config;
     BLELibrary::createDefaultConfig(&config, BLE_MODE_SERVER_ONLY);
     
-    if (device_name != nullptr) {
-        strncpy(config.device_name, device_name, BLE_MAX_DEVICE_NAME_LEN - 1);
+    if (deviceName != nullptr) {
+        strncpy(config.deviceName, deviceName, BLE_MAX_DEVICE_NAME_LEN - 1);
     }
     
     BLELibrary* library = new BLELibrary(config);
@@ -969,261 +965,26 @@ BLELibrary* createBLEServer(const char* device_name) {
     return library;
 }
 
-BLELibrary* createBLEDual(const char* device_name, const char* target_server) {
+BLELibrary* createBLEDual(const char* deviceName, const char* targetServer) {
     ble_library_config_t config;
     BLELibrary::createDefaultConfig(&config, BLE_MODE_DUAL);
     
-    if (device_name != nullptr) {
-        strncpy(config.device_name, device_name, BLE_MAX_DEVICE_NAME_LEN - 1);
+    if (deviceName != nullptr) {
+        strncpy(config.deviceName, deviceName, BLE_MAX_DEVICE_NAME_LEN - 1);
     }
     
     BLELibrary* library = new BLELibrary(config);
-    if (library != nullptr && target_server != nullptr) {
-        ble_client_config_t client_config;
-        memset(&client_config, 0, sizeof(client_config));
-        strncpy(client_config.target_device_name, target_server, BLE_MAX_DEVICE_NAME_LEN - 1);
-        client_config.scan_timeout_ms = 10000;
-        client_config.auto_reconnect = true;
-        
+    if (library != nullptr && targetServer != nullptr) {
+        ble_client_config_t clientConfig;
+        memset(&clientConfig, 0, sizeof(clientConfig));
+        strncpy(clientConfig.target_device_name, targetServer, BLE_MAX_DEVICE_NAME_LEN - 1);
+        clientConfig.scan_timeout_ms = 10000;
+        clientConfig.auto_reconnect = true;
+
         if (library->init() == ESP_OK) {
-            library->setClientConfig(client_config);
+            library->setClientConfig(clientConfig);
         }
     }
     
     return library;
-}
-
-/******************************************************************************/
-/*                                 Examples                                   */
-/******************************************************************************/
-
-namespace BLEExamples {
-
-void simpleClientExample() {
-    ble_log(ESP_LOG_INFO, "=== Simple BLE Client Example ===");
-    
-    // Create and configure client
-    BLELibrary* ble = createBLEClient("MyClient", "ESP32_BLE_Server");
-    if (ble == nullptr) {
-        ble_log(ESP_LOG_ERROR, "Failed to create BLE client");
-        return;
-    }
-    
-    // Set up callbacks
-    BLEClient* client = ble->getClient();
-    if (client != nullptr) {
-        client->setConnectedCallback([](const ble_device_info_t* device_info) {
-            ble_log(ESP_LOG_INFO, "Connected to server!");
-        });
-        
-        client->setDataReceivedCallback([](const ble_data_packet_t* data) {
-            ble_log(ESP_LOG_INFO, "Received: Battery=%d%%, Data=%s", 
-                    data->battery_level, data->custom_data);
-        });
-    }
-    
-    // Start services
-    esp_err_t ret = ble->start();
-    if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to start client: %s", esp_err_to_name(ret));
-        delete ble;
-        return;
-    }
-    
-    ble_log(ESP_LOG_INFO, "Client started successfully. Scanning for servers...");
-    
-    // In a real application, you would keep the library running
-    // For this example, we'll clean up after a delay
-    vTaskDelay(pdMS_TO_TICKS(30000));  // Run for 30 seconds
-    
-    delete ble;
-    ble_log(ESP_LOG_INFO, "Client example completed");
-}
-
-void simpleServerExample() {
-    ble_log(ESP_LOG_INFO, "=== Simple BLE Server Example ===");
-    
-    // Create and configure server
-    BLELibrary* ble = createBLEServer("ESP32_BLE_Server");
-    if (ble == nullptr) {
-        ble_log(ESP_LOG_ERROR, "Failed to create BLE server");
-        return;
-    }
-    
-    // Set up callbacks
-    BLEServer* server = ble->getServer();
-    if (server != nullptr) {
-        server->setClientConnectedCallback([](uint16_t conn_id, const ble_device_info_t* client_info) {
-            ble_log(ESP_LOG_INFO, "Client connected: conn_id=%d", conn_id);
-        });
-        
-        server->setDataWrittenCallback([](uint16_t conn_id, const uint8_t* data, uint16_t length) {
-            ble_log(ESP_LOG_INFO, "Client %d wrote data: %.*s", conn_id, length, data);
-        });
-    }
-    
-    // Start services
-    esp_err_t ret = ble->start();
-    if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to start server: %s", esp_err_to_name(ret));
-        delete ble;
-        return;
-    }
-    
-    ble_log(ESP_LOG_INFO, "Server started successfully. Advertising...");
-    
-    // Update data periodically
-    for (int i = 0; i < 60; i++) {  // Run for 60 seconds
-        char custom_data[64];
-        snprintf(custom_data, sizeof(custom_data), "Hello from ESP32! Count: %d", i);
-        
-        ble->updateServerData(100 - (i % 100), custom_data);
-        
-        vTaskDelay(pdMS_TO_TICKS(1000));  // Update every second
-    }
-    
-    delete ble;
-    ble_log(ESP_LOG_INFO, "Server example completed");
-}
-
-void dualModeExample() {
-    ble_log(ESP_LOG_INFO, "=== Dual Mode BLE Example ===");
-    
-    // Create dual mode library
-    BLELibrary* ble = createBLEDual("ESP32_BLE_Dual", "ESP32_BLE_Server");
-    if (ble == nullptr) {
-        ble_log(ESP_LOG_ERROR, "Failed to create dual mode BLE");
-        return;
-    }
-    
-    // Configure client callbacks
-    BLEClient* client = ble->getClient();
-    if (client != nullptr) {
-        client->setConnectedCallback([](const ble_device_info_t* device_info) {
-            ble_log(ESP_LOG_INFO, "CLIENT: Connected to server");
-        });
-    }
-    
-    // Configure server callbacks
-    BLEServer* server = ble->getServer();
-    if (server != nullptr) {
-        server->setClientConnectedCallback([](uint16_t conn_id, const ble_device_info_t* client_info) {
-            ble_log(ESP_LOG_INFO, "SERVER: Client %d connected", conn_id);
-        });
-    }
-    
-    // Start services
-    esp_err_t ret = ble->start();
-    if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to start dual mode: %s", esp_err_to_name(ret));
-        delete ble;
-        return;
-    }
-    
-    ble_log(ESP_LOG_INFO, "Dual mode started successfully");
-    
-    // Run for a while
-    vTaskDelay(pdMS_TO_TICKS(60000));  // 60 seconds
-    
-    delete ble;
-    ble_log(ESP_LOG_INFO, "Dual mode example completed");
-}
-
-void secureConnectionExample() {
-    ble_log(ESP_LOG_INFO, "=== Secure BLE Connection Example ===");
-    
-    // Create library with enhanced security
-    ble_library_config_t config;
-    BLELibrary::createDefaultConfig(&config, BLE_MODE_SERVER_ONLY);
-    
-    // Configure enhanced security
-    config.security.level = BLE_SECURITY_AUTHENTICATED;
-    config.security.use_custom_uuids = true;
-    config.security.require_authentication = true;
-    strncpy(config.security.auth_key, "SecureKey123", BLE_MAX_AUTH_KEY_LEN - 1);
-    
-    BLELibrary* ble = new BLELibrary(config);
-    if (ble == nullptr) {
-        ble_log(ESP_LOG_ERROR, "Failed to create secure BLE server");
-        return;
-    }
-    
-    // Initialize and start
-    esp_err_t ret = ble->init();
-    if (ret == ESP_OK) {
-        ret = ble->start();
-    }
-    
-    if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to start secure server: %s", esp_err_to_name(ret));
-        delete ble;
-        return;
-    }
-    
-    ble_log(ESP_LOG_INFO, "Secure server started with authentication required");
-    
-    // Run for a while
-    vTaskDelay(pdMS_TO_TICKS(30000));
-    
-    delete ble;
-    ble_log(ESP_LOG_INFO, "Secure connection example completed");
-}
-
-void multipleClientsExample() {
-    ble_log(ESP_LOG_INFO, "=== Multiple Clients Server Example ===");
-    
-    // Create server that can handle multiple clients
-    BLELibrary* ble = createBLEServer("ESP32_MultiServer");
-    if (ble == nullptr) {
-        ble_log(ESP_LOG_ERROR, "Failed to create multi-client server");
-        return;
-    }
-    
-    BLEServer* server = ble->getServer();
-    if (server != nullptr) {
-        // Configure for multiple clients
-        ble_server_config_t server_config = server->getConfig();
-        server_config.max_clients = 8;  // Support up to 8 clients
-        server_config.client_timeout_ms = 60000;  // 60 second timeout
-        server->setConfig(server_config);
-        
-        // Set up callbacks to track multiple clients
-        server->setClientConnectedCallback([](uint16_t conn_id, const ble_device_info_t* client_info) {
-            ble_log(ESP_LOG_INFO, "Client %d connected", conn_id);
-        });
-        
-        server->setClientDisconnectedCallback([](uint16_t conn_id, int reason) {
-            ble_log(ESP_LOG_INFO, "Client %d disconnected (reason: %d)", conn_id, reason);
-        });
-        
-        server->setDataWrittenCallback([](uint16_t conn_id, const uint8_t* data, uint16_t length) {
-            ble_log(ESP_LOG_INFO, "Client %d wrote: %.*s", conn_id, length, data);
-        });
-    }
-    
-    // Start server
-    esp_err_t ret = ble->start();
-    if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to start multi-client server: %s", esp_err_to_name(ret));
-        delete ble;
-        return;
-    }
-    
-    ble_log(ESP_LOG_INFO, "Multi-client server started. Waiting for connections...");
-    
-    // Run and periodically report status
-    for (int i = 0; i < 120; i++) {  // Run for 2 minutes
-        if (i % 10 == 0 && server != nullptr) {  // Every 10 seconds
-            ble_server_status_t status = server->getStatus();
-            ble_log(ESP_LOG_INFO, "Status: %d clients connected, advertising: %s", 
-                    status.connected_clients, status.advertising_active ? "ON" : "OFF");
-        }
-        
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-    
-    delete ble;
-    ble_log(ESP_LOG_INFO, "Multiple clients example completed");
-}
-
 }

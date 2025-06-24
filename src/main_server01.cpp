@@ -39,10 +39,10 @@ extern "C" void app_main() {
     }
     
     // Personalizar configuración
-    strncpy(config.device_name, "154_BLE_Server", BLE_MAX_DEVICE_NAME_LEN - 1);
-    config.auto_start = false; // Controlaremos manualmente
-    config.enable_logging = true;
-    config.log_level = ESP_LOG_INFO;
+    strncpy(config.deviceName, "154_BLE_Server", BLE_MAX_DEVICE_NAME_LEN - 1);
+    config.autoStart = false; // Controlaremos manualmente
+    config.enableLogging = true;
+    config.logLevel = ESP_LOG_INFO;
 
     // Crear la instancia BLE
     ESP_LOGI(TAG, "Creando BLE Library...");

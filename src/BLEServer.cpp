@@ -53,7 +53,7 @@ static esp_ble_adv_params_t adv_params_ = {
 /******************************************************************************/
 
 static const ble_server_config_t default_server_config = {
-    .device_name = "ESP32-BLE-Server",
+    .deviceName = "ESP32-BLE-Server",
     .advertising_interval_ms = 1000,
     .auto_start_advertising = true,
     .data_update_interval_ms = 5000,
@@ -118,8 +118,8 @@ BLEServer::BLEServer(const ble_server_config_t& config) :
     
     // Create default security configuration
     ble_create_default_security_config(&security_config_, BLE_SECURITY_BASIC);
-    
-    ESP_LOGI(TAG, "BLEServer created with device name: %s", config_.device_name);
+
+    ESP_LOGI(TAG, "BLEServer created with device name: %s", config_.deviceName);
     ESP_LOGI(TAG, "JSON commands: %s", config_.enable_json_commands ? "ENABLED" : "DISABLED");
 }
 
@@ -195,7 +195,7 @@ esp_err_t BLEServer::init() {
     }
     
     // Set device name
-    ret = esp_ble_gap_set_device_name(config_.device_name);
+    ret = esp_ble_gap_set_device_name(config_.deviceName);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set device name: %s", esp_err_to_name(ret));
         return ret;
@@ -694,20 +694,20 @@ ble_server_config_t BLEServer::getConfig() const {
     return config_;
 }
 
-esp_err_t BLEServer::setDeviceName(const char* device_name) {
-    if (!device_name || strlen(device_name) >= BLE_MAX_DEVICE_NAME_LEN) {
+esp_err_t BLEServer::setDeviceName(const char* deviceName) {
+    if (!deviceName || strlen(deviceName) >= BLE_MAX_DEVICE_NAME_LEN) {
         return ESP_ERR_INVALID_ARG;
     }
-    
-    strcpy(config_.device_name, device_name);
-    
-    esp_err_t ret = esp_ble_gap_set_device_name(device_name);
+
+    strcpy(config_.deviceName, deviceName);
+
+    esp_err_t ret = esp_ble_gap_set_device_name(deviceName);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set device name: %s", esp_err_to_name(ret));
         return ret;
     }
-    
-    ESP_LOGI(TAG, "Device name updated to: %s", device_name);
+
+    ESP_LOGI(TAG, "Device name updated to: %s", deviceName);
     return ESP_OK;
 }
 
@@ -907,7 +907,7 @@ esp_err_t BLEServer::generateStatusReport(char* buffer, size_t buffer_size) cons
         "JSON Processing: %s\n"
         "Free Heap: %ld bytes\n",
         getStateString(),
-        config_.device_name,
+        config_.deviceName,
         status_.advertising_active ? "Active" : "Inactive",
         status_.connected_clients, max_clients_,
         status_.battery_level,

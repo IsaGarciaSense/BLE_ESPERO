@@ -4,7 +4,7 @@
  * for both client and server functionality with flexible operating modes.
  *
  * @version 0.0.1
- * @date 2025-06-15
+ * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -25,12 +25,12 @@
  */
 typedef struct {
     ble_mode_t mode;                                    ///< Operating mode (client, server, or dual)
-    char device_name[BLE_MAX_DEVICE_NAME_LEN];         ///< Device name for BLE operations
+    char deviceName[BLE_MAX_DEVICE_NAME_LEN];         ///< Device name for BLE operations
     ble_security_config_t security;                    ///< Security configuration
-    bool enable_logging;                               ///< Enable internal logging
-    esp_log_level_t log_level;                         ///< Log level for internal messages
-    bool auto_start;                                   ///< Auto-start services after init
-    uint32_t watchdog_timeout_ms;                      ///< Watchdog timeout for health monitoring
+    bool enableLogging;                               ///< Enable internal logging
+    esp_log_level_t logLevel;                         ///< Log level for internal messages
+    bool autoStart;                                   ///< Auto-start services after init
+    uint32_t watchdogTimeOut;                      ///< Watchdog timeout for health monitoring ms
 } ble_library_config_t;
 
 /**
@@ -38,15 +38,15 @@ typedef struct {
  * @brief Current status of the BLE library
  */
 typedef struct {
-    ble_state_t library_state;                         ///< Overall library state
-    ble_mode_t operating_mode;                         ///< Current operating mode
-    bool client_active;                                ///< Client module active status
-    bool server_active;                                ///< Server module active status
-    uint64_t library_uptime_ms;                        ///< Library uptime in milliseconds
-    uint32_t free_heap_size;                          ///< Current free heap size
-    uint32_t minimum_free_heap;                        ///< Minimum free heap since startup
-    esp_err_t last_error;                             ///< Last error code
-    char version_string[32];                          ///< Library version string
+    ble_state_t libraryState;                         ///< Overall library state
+    ble_mode_t operatingMode;                         ///< Current operating mode
+    bool clientActive;                                ///< Client module active status
+    bool serverActive;                                ///< Server module active status
+    uint64_t libraryUptime;                        ///< Library uptime in milliseconds
+    uint32_t freeHeapSize;                          ///< Current free heap size
+    uint32_t minimumFreeHeap;                        ///< Minimum free heap since startup
+    esp_err_t lastError;                             ///< Last error code
+    char versionString[32];                          ///< Library version string
 } ble_library_status_t;
 
 /******************************************************************************/
@@ -162,18 +162,18 @@ public:
     /**
      * @brief Sets the device name for BLE operations
      * 
-     * @param device_name New device name
+     * @param deviceName New device name
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setDeviceName(const char* device_name);
+    esp_err_t setDeviceName(const char* deviceName);
 
     /**
      * @brief Configures security settings
      * 
-     * @param security_config Security configuration to apply
+     * @param securityConfig Security configuration to apply
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setSecurityConfig(const ble_security_config_t& security_config);
+    esp_err_t setSecurityConfig(const ble_security_config_t& securityConfig);
 
     /**************************************************************************/
     /*                            Client Interface                            */
@@ -190,10 +190,10 @@ public:
     /**
      * @brief Configures the BLE client
      * 
-     * @param client_config Client configuration to apply
+     * @param clientConfig Client configuration to apply
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setClientConfig(const ble_client_config_t& client_config);
+    esp_err_t setClientConfig(const ble_client_config_t& clientConfig);
 
     /**
      * @brief Starts client scanning for servers
@@ -205,10 +205,10 @@ public:
     /**
      * @brief Connects client to a specific server
      * 
-     * @param server_address MAC address of server to connect to
+     * @param serverMACadd MAC address of server to connect to
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t connectToServer(const esp_bd_addr_t server_address);
+    esp_err_t connectToServer(const esp_bd_addr_t serverMACadd);
 
     /**************************************************************************/
     /*                            Server Interface                            */
@@ -225,10 +225,10 @@ public:
     /**
      * @brief Configures the BLE server
      * 
-     * @param server_config Server configuration to apply
+     * @param serverConfig Server configuration to apply
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setServerConfig(const ble_server_config_t& server_config);
+    esp_err_t setServerConfig(const ble_server_config_t& serverConfig);
 
     /**
      * @brief Starts server advertising
@@ -240,11 +240,11 @@ public:
     /**
      * @brief Updates server data
      * 
-     * @param battery_level New battery level (0-100%)
-     * @param custom_data New custom data string
+     * @param batteryLevel New battery level (0-100%) -----for when we want to update the battery level
+     * @param customData New custom data string
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t updateServerData(uint8_t battery_level, const char* custom_data);
+    esp_err_t updateServerData(uint8_t batteryLevel, const char* customData);
 
     /**************************************************************************/
     /*                              Status Methods                            */
@@ -348,20 +348,20 @@ public:
     /**
      * @brief Gets memory usage statistics
      * 
-     * @param free_heap Current free heap size
-     * @param min_free_heap Minimum free heap since startup
-     * @param largest_block Largest contiguous free block
+     * @param freeHeap Current free heap size
+     * @param minFreeHeap Minimum free heap since startup
+     * @param largestBlock Largest contiguous free block
      */
-    void getMemoryStats(uint32_t* free_heap, uint32_t* min_free_heap, uint32_t* largest_block) const;
+    void getMemoryStats(uint32_t* freeHeap, uint32_t* minFreeHeap, uint32_t* largestBlock) const;
 
     /**
      * @brief Generates a comprehensive status report
      * 
      * @param buffer Output buffer for the report
-     * @param buffer_size Size of the output buffer
+     * @param bufferSize Size of the output buffer
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t generateStatusReport(char* buffer, size_t buffer_size) const;
+    esp_err_t generateStatusReport(char* buffer, size_t bufferSize) const;
 
     /**
      * @brief Resets all statistics counters
@@ -457,11 +457,6 @@ protected:
     esp_err_t deinitServer();
 
     /**
-     * @brief Updates internal statistics
-     */
-    void updateStats();
-
-    /**
      * @brief Internal watchdog task for health monitoring
      * 
      * @param pvParameters Task parameters
@@ -471,18 +466,18 @@ protected:
     /**
      * @brief Internal event handler for client events
      * 
-     * @param event_type Event type
-     * @param event_data Event data
+     * @param eventType Event type
+     * @param eventData Event data
      */
-    void handleClientEvent(int event_type, void* event_data);
+    void handleClientEvent(int eventType, void* eventData);
 
     /**
      * @brief Internal event handler for server events
      * 
-     * @param event_type Event type
-     * @param event_data Event data
+     * @param eventType Event type
+     * @param eventData Event data
      */
-    void handleServerEvent(int event_type, void* event_data);
+    void handleServerEvent(int eventType, void* eventData);
 
 private:
     /**************************************************************************/
@@ -491,31 +486,31 @@ private:
 
     ble_library_config_t config_;              ///< Library configuration
     ble_state_t state_;                        ///< Current library state
-    esp_err_t last_error_;                     ///< Last error code
+    esp_err_t lastError_;                     ///< Last error code
     
     BLEClient* client_;                        ///< BLE client instance
     BLEServer* server_;                        ///< BLE server instance
     
-    bool client_initialized_;                  ///< Client initialization status
-    bool server_initialized_;                  ///< Server initialization status
-    bool common_initialized_;                  ///< Common BLE stack initialization status
+    bool clientInitialized_;                  ///< Client initialization status
+    bool serverInitialized_;                  ///< Server initialization status
+    bool commonInitialized_;                  ///< Common BLE stack initialization status
     
-    uint64_t init_time_;                       ///< Library initialization timestamp
-    uint64_t start_time_;                      ///< Library start timestamp
+    uint64_t initTime_;                       ///< Library initialization timestamp
+    uint64_t startTime_;                      ///< Library start timestamp
     
     // Callbacks
-    ble_event_callback_t event_callback_;      ///< Global event callback
-    ble_log_callback_t log_callback_;          ///< Custom log callback
+    ble_event_callback_t eventCallback_;      ///< Global event callback
+    ble_log_callback_t logCallback_;          ///< Custom log callback
     
     // Synchronization
-    SemaphoreHandle_t state_mutex_;            ///< State protection mutex
-    
+    SemaphoreHandle_t stateMutex_;            ///< State protection mutex
+
     // Tasks
-    TaskHandle_t watchdog_task_handle_;        ///< Watchdog task handle
-    
+    TaskHandle_t watchdogTaskHandle_;        ///< Watchdog task handle
+
     // Statistics
-    uint32_t restart_count_;                   ///< Number of restarts
-    uint64_t total_uptime_;                    ///< Total uptime across restarts
+    uint32_t restartCount_;                   ///< Number of restarts
+    uint64_t totalUpTime_;                    ///< Total uptime across restarts
 };
 
 /******************************************************************************/
@@ -525,73 +520,25 @@ private:
 /**
  * @brief Creates a client-only BLE library instance
  * 
- * @param device_name Name of this device
- * @param target_server Name of server to connect to
+ * @param deviceName Name of this device
+ * @param targetServer Name of server to connect to
  * @return BLELibrary* Configured library instance
  */
-BLELibrary* createBLEClient(const char* device_name, const char* target_server);
+BLELibrary* createBLEClient(const char* deviceName, const char* targetServer);
 
 /**
  * @brief Creates a server-only BLE library instance
  * 
- * @param device_name Name of this device for advertising
+ * @param deviceName Name of this device for advertising
  * @return BLELibrary* Configured library instance
  */
-BLELibrary* createBLEServer(const char* device_name);
+BLELibrary* createBLEServer(const char* deviceName);
 
 /**
  * @brief Creates a dual-mode BLE library instance
  * 
- * @param device_name Name of this device
- * @param target_server Name of server to connect to (for client mode)
+ * @param deviceName Name of this device
+ * @param targetServer Name of server to connect to (for client mode)
  * @return BLELibrary* Configured library instance
  */
-BLELibrary* createBLEDual(const char* device_name, const char* target_server);
-
-/******************************************************************************/
-/*                                 Examples                                   */
-/******************************************************************************/
-
-namespace BLEExamples {
-
-/**
- * @brief Simple client example
- * 
- * Shows how to create a basic BLE client that connects to a server
- * and reads data periodically.
- */
-void simpleClientExample();
-
-/**
- * @brief Simple server example
- * 
- * Shows how to create a basic BLE server that advertises services
- * and serves data to connected clients.
- */
-void simpleServerExample();
-
-/**
- * @brief Dual mode example
- * 
- * Shows how to create a device that acts as both client and server
- * simultaneously, connecting to one device while serving others.
- */
-void dualModeExample();
-
-/**
- * @brief Secure connection example
- * 
- * Demonstrates advanced security features including custom UUIDs,
- * authentication, and encrypted connections.
- */
-void secureConnectionExample();
-
-/**
- * @brief Multiple clients example
- * 
- * Shows how to create a server that handles multiple simultaneous
- * client connections with individual session management.
- */
-void multipleClientsExample();
-
-} // namespace BLEExamples
+BLELibrary* createBLEDual(const char* deviceName, const char* targetServer);

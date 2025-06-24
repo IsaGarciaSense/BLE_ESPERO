@@ -54,7 +54,7 @@ typedef enum {
  * @brief Configuration structure for BLE server
  */
 typedef struct {
-    char device_name[BLE_MAX_DEVICE_NAME_LEN];     ///< Server device name
+    char deviceName[BLE_MAX_DEVICE_NAME_LEN];     ///< Server device name
     uint32_t advertising_interval_ms;              ///< Advertising interval in milliseconds
     bool auto_start_advertising;                   ///< Auto-start advertising on init
     uint32_t data_update_interval_ms;              ///< Interval for automatic data updates
