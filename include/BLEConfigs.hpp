@@ -24,8 +24,10 @@
 #include "esp_gatt_common_api.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+
 #include "nvs.h"
 #include "nvs_flash.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"

@@ -9,7 +9,9 @@
  *******************************************************************************/
 
 #include "BLE.hpp"
+
 #include "esp_log.h"
+
 #include "nvs_flash.h"
 
 static const char* TAG = "MAIN";

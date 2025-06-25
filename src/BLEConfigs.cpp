@@ -10,8 +10,10 @@
  *******************************************************************************/
 
 #include "BLEConfigs.hpp"
-#include "esp_random.h" 
+
 #include <stdarg.h>
+
+#include "esp_random.h" 
 
 #define BLE_LIBRARY_VERSION_MAJOR  0
 #define BLE_LIBRARY_VERSION_MINOR  0
