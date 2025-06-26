@@ -3,8 +3,8 @@
  * @brief Contains declarations for BLE server functionality including advertising,
  * client management, service provisioning, and JSON command processing.
  *
- * @version 0.0.5
- * @date 2025-06-24
+ * @version 0.0.6
+ * @date 2025-06-26
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -67,12 +67,12 @@ typedef struct {
     esp_bd_addr_t address;                        ///< Client MAC address
     bool authenticated;                           ///< Authentication status
     uint64_t connectTime;                        ///< Connection timestamp
-    uint64_t last_activity;                       ///< Last activity timestamp
-    uint32_t data_packets_sent;                   ///< Data packets sent to this client
-    uint32_t data_packets_received;               ///< Data packets received from this client
-    bool notifications_enabled;                   ///< Notifications enabled for this client
-    char json_buffer[512];                        ///< Buffer for accumulating JSON data
-    uint16_t json_buffer_pos;                     ///< Current position in JSON buffer
+    uint64_t lastActivity;                       ///< Last activity timestamp
+    uint32_t dataPacketsSent;                   ///< Data packets sent to this client
+    uint32_t dataPacketsReceived;               ///< Data packets received from this client
+    bool notificationsEnabled;                   ///< Notifications enabled for this client
+    char jsonBuffer[512];                        ///< Buffer for accumulating JSON data
+    uint16_t jsonBufferPos;                     ///< Current position in JSON buffer
 } ble_client_session_t;
 
 /**
@@ -80,17 +80,17 @@ typedef struct {
  * @brief Statistics for BLE server operations
  */
 typedef struct {
-    uint32_t advertising_cycles;                  ///< Number of advertising cycles
-    uint32_t total_connections;                   ///< Total connections received
-    uint32_t current_clients;                     ///< Currently connected clients
-    uint32_t successful_authentications;          ///< Successful authentications
-    uint32_t failed_authentications;             ///< Failed authentication attempts
-    uint32_t data_packets_sent;                   ///< Total data packets sent
-    uint32_t data_packets_received;               ///< Total data packets received
-    uint32_t json_commands_processed;             ///< JSON commands processed
-    uint32_t json_commands_failed;                ///< Failed JSON commands
-    uint64_t total_uptime_ms;                     ///< Total server uptime
-    uint64_t start_time;                          ///< Server start timestamp
+    uint32_t advertisingCycles;                  ///< Number of advertising cycles
+    uint32_t totalConnections;                   ///< Total connections received
+    uint32_t currentClients;                     ///< Currently connected clients
+    uint32_t successfulAuthentications;          ///< Successful authentications
+    uint32_t failedAuthentications;             ///< Failed authentication attempts
+    uint32_t dataPacketsSent;                   ///< Total data packets sent
+    uint32_t dataPacketsReceived;               ///< Total data packets received
+    uint32_t jsonCommandsProcessed;             ///< JSON commands processed
+    uint32_t jsonCommandsFailed;                ///< Failed JSON commands
+    uint64_t totalUptimeMs;                     ///< Total server uptime
+    uint64_t startTime;                          ///< Server start timestamp
 } ble_server_stats_t;
 
 /**
@@ -99,12 +99,12 @@ typedef struct {
  */
 typedef struct {
     ble_server_state_t state;                     ///< Current server state
-    uint8_t battery_level;                        ///< Current battery level
-    char custom_data[BLE_MAX_CUSTOM_DATA_LEN];    ///< Current custom data
-    uint8_t connected_clients;                    ///< Number of connected clients
-    bool advertising_active;                      ///< Advertising status
-    uint64_t last_update_time;                    ///< Last data update timestamp
-    bool json_processing_enabled;                 ///< JSON processing status
+    uint8_t batteryLevel;                        ///< Current battery level
+    char customData[BLE_MAX_CUSTOM_DATA_LEN];    ///< Current custom data
+    uint8_t connectedClients;                    ///< Number of connected clients
+    bool advertisingActive;                      ///< Advertising status
+    uint64_t lastUpdateTime;                    ///< Last data update timestamp
+    bool jsonProcessingEnabled;                 ///< JSON processing status
 } ble_server_status_t;
 
 /**
@@ -112,8 +112,8 @@ typedef struct {
  * @brief Structure for JSON command data
  */
 typedef struct {
-    uint16_t conn_id;                            ///< Connection ID that sent the command
-    char command_json[512];                      ///< JSON command string
+    uint16_t connId;                            ///< Connection ID that sent the command
+    char commandJson[512];                      ///< JSON command string
     uint64_t timestamp;                          ///< Command timestamp
 } ble_json_command_t;
 
@@ -123,47 +123,51 @@ typedef struct {
 
 /**
  * @brief Callback for when a client connects to the server
- * @param conn_id Connection ID of the new client
- * @param client_info Information about the connected client
+ * @param connId Connection ID of the new client
+ * @param clientInfo Information about the connected client
  */
-typedef void (*ble_server_client_connected_cb_t)(uint16_t conn_id, const ble_device_info_t* client_info);
+typedef void (*ble_server_client_connected_cb_t)(uint16_t connId, 
+                                                  const ble_device_info_t* clientInfo);
 
 /**
  * @brief Callback for when a client disconnects from the server
- * @param conn_id Connection ID of the disconnected client
+ * @param connId Connection ID of the disconnected client
  * @param reason Disconnection reason
  */
-typedef void (*ble_server_client_disconnected_cb_t)(uint16_t conn_id, int reason);
+typedef void (*ble_server_client_disconnected_cb_t)(uint16_t connId, int reason);
 
 /**
  * @brief Callback for when data is written by a client
- * @param conn_id Connection ID of the client
+ * @param connId Connection ID of the client
  * @param data Data written by the client
  * @param length Length of the data
  */
-typedef void (*ble_server_data_written_cb_t)(uint16_t conn_id, const uint8_t* data, uint16_t length);
+typedef void (*ble_server_data_written_cb_t)(uint16_t connId, const uint8_t* data, 
+                                              uint16_t length);
 
 /**
  * @brief Callback for when data is read by a client
- * @param conn_id Connection ID of the client
- * @param characteristic_type Type of characteristic read (battery, custom, etc.)
+ * @param connId Connection ID of the client
+ * @param characteristicType Type of characteristic read (battery, custom, etc.)
  */
-typedef void (*ble_server_data_read_cb_t)(uint16_t conn_id, const char* characteristic_type);
+typedef void (*ble_server_data_read_cb_t)(uint16_t connId, 
+                                           const char* characteristicType);
 
 /**
  * @brief Callback for client authentication events
- * @param conn_id Connection ID of the client
+ * @param connId Connection ID of the client
  * @param success True if authentication was successful
- * @param auth_data Authentication data provided by client
+ * @param authData Authentication data provided by client
  */
-typedef void (*ble_server_client_auth_cb_t)(uint16_t conn_id, bool success, const char* auth_data);
+typedef void (*ble_server_client_auth_cb_t)(uint16_t connId, bool success, 
+                                             const char* authData);
 
 /**
  * @brief Callback for advertising events
  * @param started True if advertising started, false if stopped
- * @param error_code Error code if operation failed
+ * @param errorCode Error code if operation failed
  */
-typedef void (*ble_server_advertising_cb_t)(bool started, esp_err_t error_code);
+typedef void (*ble_server_advertising_cb_t)(bool started, esp_err_t errorCode);
 
 /**
  * @brief Callback for JSON command processing
@@ -248,19 +252,19 @@ public:
     /**
      * @brief Sends a JSON response to a specific client
      * 
-     * @param conn_id Connection ID of the target client
-     * @param json_response JSON response string
+     * @param connId Connection ID of the target client
+     * @param _jsonResponse JSON response string
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t sendJsonResponse(uint16_t conn_id, const char* json_response);
+    esp_err_t sendJsonResponse(uint16_t connId, const char* _jsonResponse);
 
     /**
      * @brief Sends a JSON response to all connected clients
      * 
-     * @param json_response JSON response string
+     * @param _jsonResponse JSON response string
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t sendJsonResponseToAll(const char* json_response);
+    esp_err_t sendJsonResponseToAll(const char* _jsonResponse);
 
     /**
      * @brief Sends notifications to all connected clients
@@ -274,19 +278,19 @@ public:
     /**
      * @brief Sends notification to a specific client
      * 
-     * @param conn_id Connection ID of the target client
-     * @param characteristic_type Type of characteristic to notify ("battery" or "custom")
+     * @param connId Connection ID of the target client
+     * @param characteristicType Type of characteristic to notify ("battery" or "custom")
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t notifyClient(uint16_t conn_id, const char* characteristic_type);
+    esp_err_t notifyClient(uint16_t connId, const char* characteristicType);
 
     /**
      * @brief Disconnects a specific client
      * 
-     * @param conn_id Connection ID of the client to disconnect
+     * @param connId Connection ID of the client to disconnect
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t disconnectClient(uint16_t conn_id);
+    esp_err_t disconnectClient(uint16_t connId);
 
     /**
      * @brief Disconnects all connected clients
@@ -294,10 +298,6 @@ public:
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
     esp_err_t disconnectAllClients();
-
-    /**************************************************************************/
-    /*                           Configuration Methods                        */
-    /**************************************************************************/
 
     /**
      * @brief Updates the server configuration
@@ -318,22 +318,18 @@ public:
     /**
      * @brief Sets the device name for advertising
      * 
-     * @param device_name New device name
+     * @param deviceName New device name
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setDeviceName(const char* device_name);
+    esp_err_t setDeviceName(const char* deviceName);
 
     /**
      * @brief Sets the advertising interval
      * 
-     * @param interval_ms Advertising interval in milliseconds
+     * @param intervalMs Advertising interval in milliseconds
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setAdvertisingInterval(uint32_t interval_ms);
-
-    /**************************************************************************/
-    /*                            Callback Registration                       */
-    /**************************************************************************/
+    esp_err_t setAdvertisingInterval(uint32_t intervalMs);
 
     /**
      * @brief Registers callback for client connection events
@@ -384,10 +380,6 @@ public:
      */
     void setJsonCommandCallback(ble_server_json_command_cb_t callback);
 
-    /**************************************************************************/
-    /*                              Status Methods                            */
-    /**************************************************************************/
-
     /**
      * @brief Gets the current server state
      * 
@@ -426,19 +418,20 @@ public:
     /**
      * @brief Gets information about a specific client session
      * 
-     * @param conn_id Connection ID of the client
+     * @param connId Connection ID of the client
      * @return ble_client_session_t* Pointer to client session, nullptr if not found
      */
-    const ble_client_session_t* getClientSession(uint16_t conn_id) const;
+    const ble_client_session_t* getClientSession(uint16_t connId) const;
 
     /**
      * @brief Gets list of all connected client sessions
      * 
-     * @param sessions Output array to store client sessions
-     * @param max_sessions Maximum number of sessions to return
+     * @param _sessions Output array to store client sessions
+     * @param maxSessions Maximum number of sessions to return
      * @return uint8_t Number of sessions returned
      */
-    uint8_t getAllClientSessions(ble_client_session_t* sessions, uint8_t max_sessions) const;
+    uint8_t getAllClientSessions(ble_client_session_t* _sessions, 
+                                 uint8_t maxSessions) const;
 
     /**
      * @brief Gets server operation statistics
@@ -451,10 +444,6 @@ public:
      * @brief Resets server statistics
      */
     void resetStats();
-
-    /**************************************************************************/
-    /*                              Utility Methods                           */
-    /**************************************************************************/
 
     /**
      * @brief Gets a string representation of the current state
@@ -480,25 +469,21 @@ public:
     /**
      * @brief Gets memory usage information
      * 
-     * @param free_heap Output parameter for free heap size
-     * @param min_free_heap Output parameter for minimum free heap since boot
+     * @param _freeHeap Output parameter for free heap size
+     * @param _minFreeHeap Output parameter for minimum free heap since boot
      */
-    void getMemoryInfo(uint32_t* free_heap, uint32_t* min_free_heap) const;
+    void getMemoryInfo(uint32_t* _freeHeap, uint32_t* _minFreeHeap) const;
 
     /**
      * @brief Generates a status report string
      * 
-     * @param buffer Output buffer for the report
-     * @param buffer_size Size of the output buffer
+     * @param _buffer Output buffer for the report
+     * @param bufferSize Size of the output buffer
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t generateStatusReport(char* buffer, size_t buffer_size) const;
+    esp_err_t generateStatusReport(char* _buffer, size_t bufferSize) const;
 
 protected:
-    /**************************************************************************/
-    /*                              Internal Methods                          */
-    /**************************************************************************/
-
     /**
      * @brief Internal GAP callback handler
      * 
@@ -511,54 +496,54 @@ protected:
      * @brief Internal GATTS callback handler
      * 
      * @param event GATTS event type
-     * @param gatts_if GATT server interface
+     * @param gattsIf GATT server interface
      * @param param Event parameters
      */
-    static void gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, 
+    static void gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gattsIf, 
                              esp_ble_gatts_cb_param_t *param);
 
     /**
      * @brief Validates client authentication data
      * 
-     * @param conn_id Connection ID of the client
-     * @param auth_data Authentication data to validate
+     * @param connId Connection ID of the client
+     * @param authData Authentication data to validate
      * @return bool True if authentication is valid
      */
-    bool validateClientAuthentication(uint16_t conn_id, const char* auth_data);
+    bool validateClientAuthentication(uint16_t connId, const char* authData);
 
     /**
      * @brief Adds a new client session
      * 
-     * @param conn_id Connection ID of the new client
-     * @param client_addr Client MAC address
+     * @param connId Connection ID of the new client
+     * @param _clientAddr Client MAC address
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t addClientSession(uint16_t conn_id, const esp_bd_addr_t client_addr);
+    esp_err_t addClientSession(uint16_t connId, const esp_bd_addr_t _clientAddr);
 
     /**
      * @brief Removes a client session
      * 
-     * @param conn_id Connection ID of the client to remove
+     * @param connId Connection ID of the client to remove
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t removeClientSession(uint16_t conn_id);
+    esp_err_t removeClientSession(uint16_t connId);
 
     /**
      * @brief Processes JSON data received from a client
      * 
-     * @param conn_id Connection ID of the client
+     * @param connId Connection ID of the client
      * @param data JSON data received
      * @param length Length of the data
      */
-    void processJsonData(uint16_t conn_id, const uint8_t* data, uint16_t length);
+    void processJsonData(uint16_t connId, const uint8_t* data, uint16_t length);
 
     /**
      * @brief Processes a complete JSON command
      * 
-     * @param conn_id Connection ID of the client
-     * @param json_string Complete JSON command string
+     * @param connId Connection ID of the client
+     * @param jsonString Complete JSON command string
      */
-    void processJsonCommand(uint16_t conn_id, const char* json_string);
+    void processJsonCommand(uint16_t connId, const char* jsonString);
 
     /**
      * @brief Internal task for automatic data updates
@@ -575,50 +560,47 @@ protected:
     static void clientTimeoutTask(void *pvParameters);
 
 private:
-    /**************************************************************************/
-    /*                              Member Variables                          */
-    /**************************************************************************/
-
     ble_server_config_t config_;                   ///< Server configuration
     ble_server_state_t state_;                     ///< Current server state
-    ble_security_config_t security_config_;       ///< Security configuration
+    ble_security_config_t securityConfig_;        ///< Security configuration
     
-    esp_gatt_if_t gatts_if_;                      ///< GATT server interface
+    esp_gatt_if_t gattsIf_;                       ///< GATT server interface
     ble_server_status_t status_;                  ///< Current server status
     ble_server_stats_t stats_;                    ///< Operation statistics
     
     // Service and characteristic handles
-    uint16_t service_handle_;                     ///< Service handle
-    uint16_t battery_char_handle_;                ///< Battery characteristic handle
-    uint16_t custom_char_handle_;                 ///< Custom characteristic handle
-    uint16_t battery_descr_handle_;               ///< Battery descriptor handle
-    uint16_t custom_descr_handle_;                ///< Custom descriptor handle
+    uint16_t serviceHandle_;                      ///< Service handle
+    uint16_t batteryCharHandle_;                  ///< Battery characteristic handle
+    uint16_t customCharHandle_;                   ///< Custom characteristic handle
+    uint16_t batteryDescrHandle_;                 ///< Battery descriptor handle
+    uint16_t customDescrHandle_;                  ///< Custom descriptor handle
     
     // Client management
-    ble_client_session_t client_sessions_[8];     ///< Array of client sessions
-    uint8_t max_clients_;                         ///< Maximum number of clients
+    static const uint8_t kMaxClientSessions = 8;
+    ble_client_session_t clientSessions_[kMaxClientSessions]; ///< Array of client sessions
+    uint8_t maxClients_;                          ///< Maximum number of clients
     
     // Callbacks
-    ble_server_client_connected_cb_t client_connected_cb_;     ///< Client connected callback
-    ble_server_client_disconnected_cb_t client_disconnected_cb_; ///< Client disconnected callback
-    ble_server_data_written_cb_t data_written_cb_;             ///< Data written callback
-    ble_server_data_read_cb_t data_read_cb_;                   ///< Data read callback
-    ble_server_client_auth_cb_t client_auth_cb_;               ///< Client authentication callback
-    ble_server_advertising_cb_t advertising_cb_;               ///< Advertising callback
-    ble_server_json_command_cb_t json_command_cb_;             ///< JSON command callback
+    ble_server_client_connected_cb_t clientConnectedCB_;     ///< Client connected callback
+    ble_server_client_disconnected_cb_t clientDisconnectedCB_; ///< Client disconnected callback
+    ble_server_data_written_cb_t dataWrittenCB_;             ///< Data written callback
+    ble_server_data_read_cb_t dataReadCB_;                   ///< Data read callback
+    ble_server_client_auth_cb_t clientAuthCB_;               ///< Client authentication callback
+    ble_server_advertising_cb_t advertisingCB_;              ///< Advertising callback
+    ble_server_json_command_cb_t jsonCommandCB_;             ///< JSON command callback
     
     // Task handles
-    TaskHandle_t data_update_task_handle_;        ///< Data update task handle
-    TaskHandle_t client_timeout_task_handle_;     ///< Client timeout task handle
+    TaskHandle_t dataUpdateTaskHandle_;           ///< Data update task handle
+    TaskHandle_t clientTimeoutTaskHandle_;        ///< Client timeout task handle
     
     // Synchronization
-    SemaphoreHandle_t clients_mutex_;             ///< Client sessions protection mutex
-    SemaphoreHandle_t data_mutex_;                ///< Data protection mutex
+    SemaphoreHandle_t clientsMutex_;              ///< Client sessions protection mutex
+    SemaphoreHandle_t dataMutex_;                 ///< Data protection mutex
     
     // Data storage
-    uint8_t battery_level_;                       ///< Current battery level
-    char custom_data_[BLE_MAX_CUSTOM_DATA_LEN];   ///< Current custom data
+    uint8_t batteryLevel_;                        ///< Current battery level
+    char customData_[BLE_MAX_CUSTOM_DATA_LEN];    ///< Current custom data
     
     // Static instance for callbacks
-    static BLEServer* instance_;                  ///< Static instance for C callbacks
+    static BLEServer* s_instance;                 ///< Static instance for C callbacks
 };

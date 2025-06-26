@@ -3,8 +3,8 @@
  * @brief Implementation of common BLE functionality including initialization,
  * utilities, and shared resources.
  *
- * @version 0.0.5
- * @date 2025-06-24
+ * @version 0.0.6
+ * @date 2025-06-26
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -13,18 +13,17 @@
 
 #include <stdarg.h>
 
-#include "esp_random.h" 
+#include "esp_random.h"
 
 #define BLE_LIBRARY_VERSION_MAJOR  0
 #define BLE_LIBRARY_VERSION_MINOR  0
 #define BLE_LIBRARY_VERSION_PATCH  5
 
-static const char* BLE_TAG = "BLE_COMMON";
-static ble_state_t ble_global_state = BLE_STATE_UNINITIALIZED;
-static ble_event_callback_t global_event_callback = nullptr;
-static ble_log_callback_t global_log_callback = nullptr;
-
-static bool ble_common_initialized = false;
+static const char* s_bleTag = "BLE_COMMON";
+static ble_state_t s_bleGlobalState = BLE_STATE_UNINITIALIZED;
+static ble_event_callback_t s_globalEventCallback = nullptr;
+static ble_log_callback_t s_globalLogCallback = nullptr;
+static bool s_bleCommonInitialized = false;
 
 /**
  * @brief Default custom service UUID (128-bit) for enhanced security
@@ -53,7 +52,7 @@ const uint8_t BLE_DEFAULT_CUSTOM_CHAR_UUID_128[BLE_UUID_128_LEN] = {
 esp_err_t ble_common_init(void) {
     esp_err_t ret;
 
-    if (ble_common_initialized) {
+    if (s_bleCommonInitialized) {
         ble_log(ESP_LOG_INFO, "BLE common subsystem already initialized, skipping...");
         return ESP_OK;
     }
@@ -70,8 +69,8 @@ esp_err_t ble_common_init(void) {
         ble_log(ESP_LOG_DEBUG, "Classic BT memory released successfully");
     }
 
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    ret = esp_bt_controller_init(&bt_cfg);
+    esp_bt_controller_config_t btConfig = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    ret = esp_bt_controller_init(&btConfig);
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ble_log(ESP_LOG_ERROR, "Failed to initialize BT controller: %s", esp_err_to_name(ret));
         return ret;
@@ -111,15 +110,15 @@ esp_err_t ble_common_init(void) {
         ble_log(ESP_LOG_DEBUG, "Bluedroid enabled successfully");
     }
 
-    ble_common_initialized = true;
-    ble_global_state = BLE_STATE_INITIALIZED;
+    s_bleCommonInitialized = true;
+    s_bleGlobalState = BLE_STATE_INITIALIZED;
     ble_log(ESP_LOG_INFO, "BLE common subsystem initialized successfully");
 
     return ESP_OK;
 }
 
 esp_err_t ble_common_deinit(void) {
-    if (!ble_common_initialized) {
+    if (!s_bleCommonInitialized) {
         ble_log(ESP_LOG_DEBUG, "BLE common subsystem not initialized, skipping deinit");
         return ESP_OK;
     }
@@ -127,63 +126,63 @@ esp_err_t ble_common_deinit(void) {
     ble_log(ESP_LOG_INFO, "Deinitializing BLE common subsystem");
 
     esp_err_t ret = ESP_OK;
-    esp_err_t final_ret = ESP_OK;
+    esp_err_t finalRet = ESP_OK;
 
     ret = esp_bluedroid_disable();
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ble_log(ESP_LOG_WARN, "Failed to disable Bluedroid: %s", esp_err_to_name(ret));
-        final_ret = ESP_FAIL;
+        finalRet = ESP_FAIL;
     }
 
     ret = esp_bluedroid_deinit();
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ble_log(ESP_LOG_WARN, "Failed to deinitialize Bluedroid: %s", esp_err_to_name(ret));
-        final_ret = ESP_FAIL;
+        finalRet = ESP_FAIL;
     }
 
     ret = esp_bt_controller_disable();
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ble_log(ESP_LOG_WARN, "Failed to disable BT controller: %s", esp_err_to_name(ret));
-        final_ret = ESP_FAIL;
+        finalRet = ESP_FAIL;
     }
 
     ret = esp_bt_controller_deinit();
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ble_log(ESP_LOG_WARN, "Failed to deinitialize BT controller: %s", esp_err_to_name(ret));
-        final_ret = ESP_FAIL;
+        finalRet = ESP_FAIL;
     }
 
-    ble_common_initialized = false;
-    ble_global_state = BLE_STATE_UNINITIALIZED;
+    s_bleCommonInitialized = false;
+    s_bleGlobalState = BLE_STATE_UNINITIALIZED;
     ble_log(ESP_LOG_INFO, "BLE common subsystem deinitialized");
 
-    return final_ret;
+    return finalRet;
 }
 
 bool ble_common_is_initialized(void) {
-    return ble_common_initialized;
+    return s_bleCommonInitialized;
 }
 
 void ble_set_event_callback(ble_event_callback_t callback) {
-    global_event_callback = callback;
+    s_globalEventCallback = callback;
     ble_log(ESP_LOG_DEBUG, "Global event callback set");
 }
 
 void ble_set_log_callback(ble_log_callback_t callback) {
-    global_log_callback = callback;
+    s_globalLogCallback = callback;
     ble_log(ESP_LOG_DEBUG, "Global log callback set");
 }
 
 ble_state_t ble_get_state(void) {
-    return ble_global_state;
+    return s_bleGlobalState;
 }
 
-void ble_addr_to_string(esp_bd_addr_t bda, char *str) {
-    if (str == nullptr) {
+void ble_addr_to_string(esp_bd_addr_t bda, char *_str) {
+    if (_str == nullptr) {
         return;
     }
     
-    sprintf(str, "%02X:%02X:%02X:%02X:%02X:%02X",
+    sprintf(_str, "%02X:%02X:%02X:%02X:%02X:%02X",
             bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
 }
 
@@ -195,21 +194,21 @@ bool ble_compare_uuid128(const uint8_t* uuid1, const uint8_t* uuid2) {
     return memcmp(uuid1, uuid2, BLE_UUID_128_LEN) == 0;
 }
 
-esp_err_t ble_generate_auth_key(char* key_buffer, size_t key_length) {
-    if (key_buffer == nullptr || key_length == 0) {
+esp_err_t ble_generate_auth_key(char* _keyBuffer, size_t keyLength) {
+    if (_keyBuffer == nullptr || keyLength == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
     // Simple random key generation
     const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     
-    for (size_t i = 0; i < key_length - 1; i++) {
-        uint32_t random_val = esp_random();
-        key_buffer[i] = charset[random_val % (sizeof(charset) - 1)];
+    for (size_t i = 0; i < keyLength - 1; i++) {
+        uint32_t randomVal = esp_random();
+        _keyBuffer[i] = charset[randomVal % (sizeof(charset) - 1)];
     }
-    key_buffer[key_length - 1] = '\0';
+    _keyBuffer[keyLength - 1] = '\0';
 
-    ble_log(ESP_LOG_DEBUG, "Generated authentication key of length %d", key_length - 1);
+    ble_log(ESP_LOG_DEBUG, "Generated authentication key of length %d", keyLength - 1);
     return ESP_OK;
 }
 
@@ -232,47 +231,46 @@ bool ble_validate_device_name(const char* name) {
     return true;
 }
 
-esp_err_t ble_create_default_security_config(ble_security_config_t* config, 
-                                            ble_security_level_t level) {
-    if (config == nullptr) {
+esp_err_t ble_create_default_security_config(ble_security_config_t* _config, 
+                                              ble_security_level_t level) {
+    if (_config == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    memset(config, 0, sizeof(ble_security_config_t));
+    memset(_config, 0, sizeof(ble_security_config_t));
     
-    config->level = level;
+    _config->level = level;
     
     switch (level) {
         case BLE_SECURITY_NONE:
-            config->useCustomUUIDS = false;
-            config->requireAuthentication = false;
+            _config->useCustomUUIDS = false;
+            _config->requireAuthentication = false;
             break;
             
         case BLE_SECURITY_BASIC:
-            config->useCustomUUIDS = true;
-            config->requireAuthentication = false;
-            memcpy(config->serviceUUID, BLE_DEFAULT_SERVICE_UUID_128, BLE_UUID_128_LEN);
-            memcpy(config->batteryCharUUID, BLE_DEFAULT_BATTERY_CHAR_UUID_128, BLE_UUID_128_LEN);
-            memcpy(config->customCharUUID, BLE_DEFAULT_CUSTOM_CHAR_UUID_128, BLE_UUID_128_LEN);
+            _config->useCustomUUIDS = true;
+            _config->requireAuthentication = false;
+            memcpy(_config->serviceUUID, BLE_DEFAULT_SERVICE_UUID_128, BLE_UUID_128_LEN);
+            memcpy(_config->batteryCharUUID, BLE_DEFAULT_BATTERY_CHAR_UUID_128, BLE_UUID_128_LEN);
+            memcpy(_config->customCharUUID, BLE_DEFAULT_CUSTOM_CHAR_UUID_128, BLE_UUID_128_LEN);
             break;
             
         case BLE_SECURITY_AUTHENTICATED:
-            config->useCustomUUIDS = true;
-            config->requireAuthentication = true;
-            strncpy(config->authKey, BLE_DEFAULT_AUTH_KEY, BLE_MAX_AUTH_KEY_LEN - 1);
-            memcpy(config->serviceUUID, BLE_DEFAULT_SERVICE_UUID_128, BLE_UUID_128_LEN);
-            memcpy(config->batteryCharUUID, BLE_DEFAULT_BATTERY_CHAR_UUID_128, BLE_UUID_128_LEN);
-            memcpy(config->customCharUUID, BLE_DEFAULT_CUSTOM_CHAR_UUID_128, BLE_UUID_128_LEN);
+            _config->useCustomUUIDS = true;
+            _config->requireAuthentication = true;
+            strncpy(_config->authKey, BLE_DEFAULT_AUTH_KEY, BLE_MAX_AUTH_KEY_LEN - 1);
+            memcpy(_config->serviceUUID, BLE_DEFAULT_SERVICE_UUID_128, BLE_UUID_128_LEN);
+            memcpy(_config->batteryCharUUID, BLE_DEFAULT_BATTERY_CHAR_UUID_128, BLE_UUID_128_LEN);
+            memcpy(_config->customCharUUID, BLE_DEFAULT_CUSTOM_CHAR_UUID_128, BLE_UUID_128_LEN);
             break;
             
         case BLE_SECURITY_ENCRYPTED:
-
-            config->useCustomUUIDS = true;
-            config->requireAuthentication = true;
-            strncpy(config->authKey, BLE_DEFAULT_AUTH_KEY, BLE_MAX_AUTH_KEY_LEN - 1);
-            memcpy(config->serviceUUID, BLE_DEFAULT_SERVICE_UUID_128, BLE_UUID_128_LEN);
-            memcpy(config->batteryCharUUID, BLE_DEFAULT_BATTERY_CHAR_UUID_128, BLE_UUID_128_LEN);
-            memcpy(config->customCharUUID, BLE_DEFAULT_CUSTOM_CHAR_UUID_128, BLE_UUID_128_LEN);
+            _config->useCustomUUIDS = true;
+            _config->requireAuthentication = true;
+            strncpy(_config->authKey, BLE_DEFAULT_AUTH_KEY, BLE_MAX_AUTH_KEY_LEN - 1);
+            memcpy(_config->serviceUUID, BLE_DEFAULT_SERVICE_UUID_128, BLE_UUID_128_LEN);
+            memcpy(_config->batteryCharUUID, BLE_DEFAULT_BATTERY_CHAR_UUID_128, BLE_UUID_128_LEN);
+            memcpy(_config->customCharUUID, BLE_DEFAULT_CUSTOM_CHAR_UUID_128, BLE_UUID_128_LEN);
             break;
             
         default:
@@ -289,7 +287,7 @@ void ble_print_version_info(void) {
             BLE_LIBRARY_VERSION_MAJOR, BLE_LIBRARY_VERSION_MINOR, BLE_LIBRARY_VERSION_PATCH);
     ble_log(ESP_LOG_INFO, "ESP-IDF Version: %s", esp_get_idf_version());
     ble_log(ESP_LOG_INFO, "Compile Time: %s %s", __DATE__, __TIME__);
-    ble_log(ESP_LOG_INFO, "Initialization State: %s", ble_common_initialized ? "INITIALIZED" : "NOT INITIALIZED");
+    ble_log(ESP_LOG_INFO, "Initialization State: %s", s_bleCommonInitialized ? "INITIALIZED" : "NOT INITIALIZED");
     ble_log(ESP_LOG_INFO, "===============================");
 }
 
@@ -298,16 +296,16 @@ void ble_log(esp_log_level_t level, const char* format, ...) {
         return;
     }
 
-    char log_buffer[256];
+    char logBuffer[256];
     va_list args;
     va_start(args, format);
-    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
+    vsnprintf(logBuffer, sizeof(logBuffer), format, args);
     va_end(args);
 
-    if (global_log_callback != nullptr) {
-        global_log_callback(level, BLE_TAG, log_buffer);
+    if (s_globalLogCallback != nullptr) {
+        s_globalLogCallback(level, s_bleTag, logBuffer);
     } else {
-        esp_log_write(level, BLE_TAG, "%s", log_buffer);
+        esp_log_write(level, s_bleTag, "%s", logBuffer);
     }
 }
 
@@ -341,13 +339,13 @@ bool ble_validate_uuid(const uint8_t* uuid, size_t length) {
         return false;
     }
 
-    bool all_zeros = true;
+    bool allZeros = true;
     for (size_t i = 0; i < length; i++) {
         if (uuid[i] != 0) {
-            all_zeros = false;
+            allZeros = false;
             break;
         }
     }
 
-    return !all_zeros;
+    return !allZeros;
 }

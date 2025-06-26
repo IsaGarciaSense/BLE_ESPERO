@@ -3,8 +3,8 @@
  * @brief Contains common declarations for BLE library including security 
  * configuration, states, and shared functionality between client and server.
  *
- * @version 0.0.5
- * @date 2025-06-24
+ * @version 0.0.6
+ * @date 2025-06-26
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -32,7 +32,6 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-
 #define BLE_MAX_DEVICE_NAME_LEN     32
 #define BLE_MAX_AUTH_KEY_LEN        32
 #define BLE_MAX_CUSTOM_DATA_LEN     64
@@ -41,7 +40,6 @@
 #define BLE_INVALID_HANDLE          0
 #define BLE_DEFAULT_SCAN_TIMEOUT    10000   // 10 seconds
 #define BLE_DEFAULT_RECONNECT_TIME  5000    // 5 seconds
-
 
 /**
  * @enum ble_mode_t
@@ -82,12 +80,12 @@ typedef enum {
  */
 typedef struct {
     ble_security_level_t level;                        ///< Security level to use
-    bool useCustomUUIDS;                             ///< Use custom 128-bit UUIDs
-    bool requireAuthentication;                       ///< Require authentication key
-    char authKey[BLE_MAX_AUTH_KEY_LEN];               ///< Authentication key
-    uint8_t serviceUUID[BLE_UUID_128_LEN];            ///< Custom service UUID (128-bit)
-    uint8_t batteryCharUUID[BLE_UUID_128_LEN];       ///< Custom battery characteristic UUID
-    uint8_t customCharUUID[BLE_UUID_128_LEN];        ///< Custom data characteristic UUID
+    bool useCustomUUIDS;                               ///< Use custom 128-bit UUIDs
+    bool requireAuthentication;                        ///< Require authentication key
+    char authKey[BLE_MAX_AUTH_KEY_LEN];                ///< Authentication key
+    uint8_t serviceUUID[BLE_UUID_128_LEN];             ///< Custom service UUID (128-bit)
+    uint8_t batteryCharUUID[BLE_UUID_128_LEN];         ///< Custom battery characteristic UUID
+    uint8_t customCharUUID[BLE_UUID_128_LEN];          ///< Custom data characteristic UUID
 } ble_security_config_t;
 
 /**
@@ -96,10 +94,10 @@ typedef struct {
  */
 typedef struct {
     esp_bd_addr_t address;                             ///< Device MAC address
-    char name[BLE_MAX_DEVICE_NAME_LEN];               ///< Device name
-    int8_t rssi;                                      ///< Signal strength (dBm)
-    bool authenticated;                               ///< Authentication status
-    uint64_t lastSeen;                              ///< Last seen timestamp
+    char name[BLE_MAX_DEVICE_NAME_LEN];                ///< Device name
+    int8_t rssi;                                       ///< Signal strength (dBm)
+    bool authenticated;                                ///< Authentication status
+    uint64_t lastSeen;                                 ///< Last seen timestamp
 } ble_device_info_t;
 
 /**
@@ -107,10 +105,10 @@ typedef struct {
  * @brief Data packet structure for BLE communication
  */
 typedef struct {
-    uint8_t batteryLevel;                            ///< Battery level (0-100%)
-    char customData[BLE_MAX_CUSTOM_DATA_LEN];       ///< Custom data string
-    uint64_t timeStamp;                              ///< Data timestamp
-    bool valid;                                   ///< Data validity flag
+    uint8_t batteryLevel;                              ///< Battery level (0-100%)
+    char customData[BLE_MAX_CUSTOM_DATA_LEN];          ///< Custom data string
+    uint64_t timeStamp;                                ///< Data timestamp
+    bool valid;                                        ///< Data validity flag
 } ble_data_packet_t;
 
 /**
@@ -197,10 +195,10 @@ ble_state_t ble_get_state(void);
 /**
  * @brief Converts a MAC address to string format
  * 
- * @param MACadd MAC address bytes
- * @param str Output string buffer (minimum 18 characters)
+ * @param macAddress MAC address bytes
+ * @param _str Output string buffer (minimum 18 characters)
  */
-void ble_addr_to_string(esp_bd_addr_t MACadd, char *str);
+void ble_addr_to_string(esp_bd_addr_t macAddress, char *_str);
 
 /**
  * @brief Compares two 128-bit UUIDs
@@ -214,11 +212,11 @@ bool ble_compare_uuid128(const uint8_t* uuid1, const uint8_t* uuid2);
 /**
  * @brief Generates a random authentication key
  * 
- * @param keyBuffer Buffer to store the generated key
+ * @param _keyBuffer Buffer to store the generated key
  * @param keyLength Length of the key to generate
  * @return esp_err_t ESP_OK on success, error code otherwise
  */
-esp_err_t ble_generate_auth_key(char* keyBuffer, size_t keyLength);
+esp_err_t ble_generate_auth_key(char* _keyBuffer, size_t keyLength);
 
 /**
  * @brief Validates BLE device name
@@ -231,12 +229,12 @@ bool ble_validate_device_name(const char* name);
 /**
  * @brief Creates a default security configuration
  * 
- * @param config Pointer to security configuration structure to fill
+ * @param _config Pointer to security configuration structure to fill
  * @param level Security level to configure
  * @return esp_err_t ESP_OK on success, error code otherwise
  */
-esp_err_t ble_create_default_security_config(ble_security_config_t* config, 
-                                            ble_security_level_t level);
+esp_err_t ble_create_default_security_config(ble_security_config_t* _config, 
+                                              ble_security_level_t level);
 
 /**
  * @brief Prints BLE library version and build information

@@ -164,10 +164,10 @@ extern "C" void app_main() {
             
             ESP_LOGI(TAG, " === State Server ===");
             ESP_LOGI(TAG, "   State: %s", server->getStateString());
-            ESP_LOGI(TAG, "   Clients conected: %d", status.connected_clients);
-            ESP_LOGI(TAG, "   Advertising active: %s", status.advertising_active ? "yes" : "NO");
-            ESP_LOGI(TAG, "   Clients totals conected: %lu", stats.total_connections);
-            ESP_LOGI(TAG, "   data_sent: %lu", stats.data_packets_sent);
+            ESP_LOGI(TAG, "   Clients conected: %d", status.connectedClients);
+            ESP_LOGI(TAG, "   Advertising active: %s", status.advertisingActive ? "yes" : "NO");
+            ESP_LOGI(TAG, "   Clients totals conected: %lu", stats.totalConnections);
+            ESP_LOGI(TAG, "   data_sent: %lu", stats.dataPacketsSent);
             ESP_LOGI(TAG, "   Time active: %llu ms", ble->getUptime());
             ESP_LOGI(TAG, "   Memory free: %lu bytes", esp_get_free_heap_size());
             ESP_LOGI(TAG, "========================");

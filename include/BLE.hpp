@@ -3,8 +3,8 @@
  * @brief Main header file for the BLE library providing unified interface
  * for both client and server functionality with flexible operating modes.
  *
- * @version 0.0.5
- * @date 2025-06-24
+ * @version 0.0.6
+ * @date 2025-06-26
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -21,12 +21,12 @@
  */
 typedef struct {
     ble_mode_t mode;                                    ///< Operating mode (client, server, or dual)
-    char deviceName[BLE_MAX_DEVICE_NAME_LEN];         ///< Device name for BLE operations
+    char deviceName[BLE_MAX_DEVICE_NAME_LEN];          ///< Device name for BLE operations
     ble_security_config_t security;                    ///< Security configuration
-    bool enableLogging;                               ///< Enable internal logging
-    esp_log_level_t logLevel;                         ///< Log level for internal messages
-    bool autoStart;                                   ///< Auto-start services after init
-    uint32_t watchdogTimeOut;                      ///< Watchdog timeout for health monitoring ms
+    bool enableLogging;                                ///< Enable internal logging
+    esp_log_level_t logLevel;                          ///< Log level for internal messages
+    bool autoStart;                                    ///< Auto-start services after init
+    uint32_t watchdogTimeOut;                         ///< Watchdog timeout for health monitoring ms
 } ble_library_config_t;
 
 /**
@@ -38,8 +38,8 @@ typedef struct {
     ble_mode_t operatingMode;                         ///< Current operating mode
     bool clientActive;                                ///< Client module active status
     bool serverActive;                                ///< Server module active status
-    uint64_t libraryUptime;                        ///< Library uptime in milliseconds
-    uint32_t freeHeapSize;                          ///< Current free heap size
+    uint64_t libraryUptime;                          ///< Library uptime in milliseconds
+    uint32_t freeHeapSize;                           ///< Current free heap size
     uint32_t minimumFreeHeap;                        ///< Minimum free heap since startup
     esp_err_t lastError;                             ///< Last error code
     char versionString[32];                          ///< Library version string
@@ -185,10 +185,10 @@ public:
     /**
      * @brief Connects client to a specific server
      * 
-     * @param serverMACadd MAC address of server to connect to
+     * @param _serverMACadd MAC address of server to connect to
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t connectToServer(const esp_bd_addr_t serverMACadd);
+    esp_err_t connectToServer(const esp_bd_addr_t _serverMACadd);
 
     /**
      * @brief Gets the BLE server instance
@@ -216,7 +216,7 @@ public:
     /**
      * @brief Updates server data
      * 
-     * @param batteryLevel New battery level (0-100%) -----for when we want to update the battery level
+     * @param batteryLevel New battery level (0-100%) for when we want to update the battery level
      * @param customData New custom data string
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
@@ -316,20 +316,21 @@ public:
     /**
      * @brief Gets memory usage statistics
      * 
-     * @param freeHeap Current free heap size
-     * @param minFreeHeap Minimum free heap since startup
-     * @param largestBlock Largest contiguous free block
+     * @param _freeHeap Current free heap size
+     * @param _minFreeHeap Minimum free heap since startup
+     * @param _largestBlock Largest contiguous free block
      */
-    void getMemoryStats(uint32_t* freeHeap, uint32_t* minFreeHeap, uint32_t* largestBlock) const;
+    void getMemoryStats(uint32_t* _freeHeap, uint32_t* _minFreeHeap, 
+                    uint32_t* _largestBlock) const;
 
     /**
      * @brief Generates a comprehensive status report
      * 
-     * @param buffer Output buffer for the report
+     * @param _buffer Output buffer for the report
      * @param bufferSize Size of the output buffer
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t generateStatusReport(char* buffer, size_t bufferSize) const;
+    esp_err_t generateStatusReport(char* _buffer, size_t bufferSize) const;
 
     /**
      * @brief Resets all statistics counters
@@ -353,11 +354,12 @@ public:
     /**
      * @brief Creates a default library configuration
      * 
-     * @param config Output configuration structure
+     * @param _config Output configuration structure
      * @param mode Operating mode to configure for
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    static esp_err_t createDefaultConfig(ble_library_config_t* config, ble_mode_t mode);
+    static esp_err_t createDefaultConfig(ble_library_config_t* _config, 
+                                         ble_mode_t mode);
 
     /**
      * @brief Validates a library configuration
@@ -436,7 +438,6 @@ protected:
     void handleServerEvent(int eventType, void* eventData);
 
 private:
-
     ble_library_config_t config_;              ///< Library configuration
     ble_state_t state_;                        ///< Current library state
     esp_err_t lastError_;                     ///< Last error code
@@ -459,7 +460,7 @@ private:
     SemaphoreHandle_t stateMutex_;            ///< State protection mutex
 
     // Tasks
-    TaskHandle_t watchdogTaskHandle_;        ///< Watchdog task handle
+    TaskHandle_t watchdogTaskHandle_;         ///< Watchdog task handle
 
     // Statistics
     uint32_t restartCount_;                   ///< Number of restarts
