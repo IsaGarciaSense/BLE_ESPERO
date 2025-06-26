@@ -511,6 +511,7 @@ bool BLEClient::performHealthCheck() {
             return false;
         }
     }
+    return true;
 }
 
 /******************************************************************************/
