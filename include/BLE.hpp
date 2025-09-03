@@ -1,49 +1,49 @@
 /*******************************************************************************
- * @file BLE.hpp
+ * @file ble.hpp
  * @brief Main header file for the BLE library providing unified interface
  * for both client and server functionality with flexible operating modes.
  *
- * @version 0.0.6
- * @date 2025-06-26
+ * @version 0.0.5
+ * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
 
 #pragma once
 
-#include "BLEConfigs.hpp"
-#include "BLEClient.hpp"
-#include "BLEServer.hpp"
+#include "ble_configs.hpp"
+#include "ble_client.hpp"
+#include "ble_server.hpp"
 
 /**
- * @struct ble_library_config_t
+ * @struct bleLibraryConfig_t
  * @brief Main configuration structure for the BLE library
  */
 typedef struct {
-    ble_mode_t mode;                                    ///< Operating mode (client, server, or dual)
-    char deviceName[BLE_MAX_DEVICE_NAME_LEN];          ///< Device name for BLE operations
-    ble_security_config_t security;                    ///< Security configuration
-    bool enableLogging;                                ///< Enable internal logging
-    esp_log_level_t logLevel;                          ///< Log level for internal messages
-    bool autoStart;                                    ///< Auto-start services after init
-    uint32_t watchdogTimeOut;                         ///< Watchdog timeout for health monitoring ms
-} ble_library_config_t;
+    bleMode_t mode;                                 ///< Operating mode (client, server, or dual)
+    char deviceName[BLE_MAX_DEVICE_NAME_LEN];       ///< Device name for BLE operations
+    bleSecurityConfig_t security;                   ///< Security configuration
+    bool enableLogging;                             ///< Enable internal logging
+    esp_log_level_t logLevel;                       ///< Log level for internal messages
+    bool autoStart;                                 ///< Auto-start services after init
+    uint32_t watchdogTimeOut;                       ///< Watchdog timeout for health monitoring ms
+} bleLibraryConfig_t;
 
 /**
- * @struct ble_library_status_t
+ * @struct bleLibraryStatus_t
  * @brief Current status of the BLE library
  */
 typedef struct {
-    ble_state_t libraryState;                         ///< Overall library state
-    ble_mode_t operatingMode;                         ///< Current operating mode
-    bool clientActive;                                ///< Client module active status
-    bool serverActive;                                ///< Server module active status
-    uint64_t libraryUptime;                          ///< Library uptime in milliseconds
-    uint32_t freeHeapSize;                           ///< Current free heap size
-    uint32_t minimumFreeHeap;                        ///< Minimum free heap since startup
-    esp_err_t lastError;                             ///< Last error code
-    char versionString[32];                          ///< Library version string
-} ble_library_status_t;
+    bleState_t libraryState;                        ///< Overall library state
+    bleMode_t operatingMode;                        ///< Current operating mode
+    bool clientActive;                              ///< Client module active status
+    bool serverActive;                              ///< Server module active status
+    uint64_t libraryUptime;                         ///< Library uptime in milliseconds
+    uint32_t freeHeapSize;                          ///< Current free heap size
+    uint32_t minimumFreeHeap;                       ///< Minimum free heap since startup
+    esp_err_t lastError;                            ///< Last error code
+    char versionString[32];                         ///< Library version string
+} bleLibraryStatus_t;
 
 /**
  * @brief Main BLE Library class providing unified interface for BLE operations
@@ -64,7 +64,7 @@ public:
      * @brief Constructs a new BLELibrary object with custom configuration
      * @param config Initial configuration for the library
      */
-    BLELibrary(const ble_library_config_t& config);
+    BLELibrary(const bleLibraryConfig_t& config);
 
     /**
      * @brief Destroys the BLELibrary object and cleans up all resources
@@ -125,14 +125,14 @@ public:
      * @return esp_err_t ESP_OK on success, error code otherwise
      * @note Call init() after changing configuration
      */
-    esp_err_t setConfig(const ble_library_config_t& config);
+    esp_err_t setConfig(const bleLibraryConfig_t& config);
 
     /**
      * @brief Gets the current library configuration
      * 
-     * @return ble_library_config_t Current configuration
+     * @return bleLibraryConfig_t Current configuration
      */
-    ble_library_config_t getConfig() const;
+    bleLibraryConfig_t getConfig() const;
 
     /**
      * @brief Sets the operating mode
@@ -141,7 +141,7 @@ public:
      * @return esp_err_t ESP_OK on success, error code otherwise
      * @note Requires restart to take effect
      */
-    esp_err_t setMode(ble_mode_t mode);
+    esp_err_t setMode(bleMode_t mode);
 
     /**
      * @brief Sets the device name for BLE operations
@@ -157,7 +157,7 @@ public:
      * @param securityConfig Security configuration to apply
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setSecurityConfig(const ble_security_config_t& securityConfig);
+    esp_err_t setSecurityConfig(const bleSecurityConfig_t& securityConfig);
 
     /**
      * @brief Gets the BLE client instance
@@ -173,7 +173,7 @@ public:
      * @param clientConfig Client configuration to apply
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setClientConfig(const ble_client_config_t& clientConfig);
+    esp_err_t setClientConfig(const bleClientConfig_t& clientConfig);
 
     /**
      * @brief Starts client scanning for servers
@@ -185,10 +185,10 @@ public:
     /**
      * @brief Connects client to a specific server
      * 
-     * @param _serverMACadd MAC address of server to connect to
+     * @param serverMACadd MAC address of server to connect to
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t connectToServer(const esp_bd_addr_t _serverMACadd);
+    esp_err_t connectToServer(const esp_bd_addr_t serverMACadd);
 
     /**
      * @brief Gets the BLE server instance
@@ -204,7 +204,7 @@ public:
      * @param serverConfig Server configuration to apply
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t setServerConfig(const ble_server_config_t& serverConfig);
+    esp_err_t setServerConfig(const bleServerConfig_t& serverConfig);
 
     /**
      * @brief Starts server advertising
@@ -216,7 +216,7 @@ public:
     /**
      * @brief Updates server data
      * 
-     * @param batteryLevel New battery level (0-100%) for when we want to update the battery level
+     * @param batteryLevel New battery level (0-100%) -----for when we want to update the battery level
      * @param customData New custom data string
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
@@ -225,16 +225,16 @@ public:
     /**
      * @brief Gets the current library state
      * 
-     * @return ble_state_t Current state
+     * @return bleState_t Current state
      */
-    ble_state_t getState() const;
+    bleState_t getState() const;
 
     /**
      * @brief Gets the current operating mode
      * 
-     * @return ble_mode_t Current mode
+     * @return bleMode_t Current mode
      */
-    ble_mode_t getMode() const;
+    bleMode_t getMode() const;
 
     /**
      * @brief Checks if the library is initialized
@@ -267,9 +267,9 @@ public:
     /**
      * @brief Gets comprehensive library status
      * 
-     * @return ble_library_status_t Current library status
+     * @return bleLibraryStatus_t Current library status
      */
-    ble_library_status_t getStatus() const;
+    bleLibraryStatus_t getStatus() const;
 
     /**
      * @brief Gets the last error that occurred
@@ -283,14 +283,14 @@ public:
      * 
      * @return const char* Version string
      */
-    static const char* getVersion();
+    static const char* kgetVersion();
 
     /**
      * @brief Gets library build information
      * 
      * @return const char* Build information string
      */
-    static const char* getBuildInfo();
+    static const char* kgetBuildInfo();
 
     /**
      * @brief Prints library information to console
@@ -316,21 +316,20 @@ public:
     /**
      * @brief Gets memory usage statistics
      * 
-     * @param _freeHeap Current free heap size
-     * @param _minFreeHeap Minimum free heap since startup
-     * @param _largestBlock Largest contiguous free block
+     * @param freeHeap Current free heap size
+     * @param minFreeHeap Minimum free heap since startup
+     * @param largestBlock Largest contiguous free block
      */
-    void getMemoryStats(uint32_t* _freeHeap, uint32_t* _minFreeHeap, 
-                    uint32_t* _largestBlock) const;
+    void getMemoryStats(uint32_t* freeHeap, uint32_t* minFreeHeap, uint32_t* largestBlock) const;
 
     /**
      * @brief Generates a comprehensive status report
      * 
-     * @param _buffer Output buffer for the report
+     * @param buffer Output buffer for the report
      * @param bufferSize Size of the output buffer
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    esp_err_t generateStatusReport(char* _buffer, size_t bufferSize) const;
+    esp_err_t generateStatusReport(char* buffer, size_t bufferSize) const;
 
     /**
      * @brief Resets all statistics counters
@@ -342,24 +341,16 @@ public:
      * 
      * @param callback Function to call for library events
      */
-    void setEventCallback(ble_event_callback_t callback);
-
-    /**
-     * @brief Sets custom log callback
-     * 
-     * @param callback Function to call for log messages
-     */
-    void setLogCallback(ble_log_callback_t callback);
+    void setEventCallback(bleEventCB_t callback);
 
     /**
      * @brief Creates a default library configuration
      * 
-     * @param _config Output configuration structure
+     * @param config Output configuration structure
      * @param mode Operating mode to configure for
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
-    static esp_err_t createDefaultConfig(ble_library_config_t* _config, 
-                                         ble_mode_t mode);
+    static esp_err_t createDefaultConfig(bleLibraryConfig_t* config, bleMode_t mode);
 
     /**
      * @brief Validates a library configuration
@@ -367,7 +358,7 @@ public:
      * @param config Configuration to validate
      * @return bool True if configuration is valid, false otherwise
      */
-    static bool validateConfig(const ble_library_config_t* config);
+    static bool validateConfig(const bleLibraryConfig_t* config);
 
     /**
      * @brief Gets string representation of operating mode
@@ -375,7 +366,7 @@ public:
      * @param mode Operating mode
      * @return const char* Mode string
      */
-    static const char* getModeString(ble_mode_t mode);
+    static const char* kgetModeString(bleMode_t mode);
 
     /**
      * @brief Gets string representation of library state
@@ -383,7 +374,7 @@ public:
      * @param state Library state
      * @return const char* State string
      */
-    static const char* getStateString(ble_state_t state);
+    static const char* kgetStateString(bleState_t state);
 
 protected:
     /**
@@ -438,33 +429,33 @@ protected:
     void handleServerEvent(int eventType, void* eventData);
 
 private:
-    ble_library_config_t config_;              ///< Library configuration
-    ble_state_t state_;                        ///< Current library state
-    esp_err_t lastError_;                     ///< Last error code
+
+    bleLibraryConfig_t config_;                     ///< Library configuration
+    bleState_t state_;                              ///< Current library state
+    esp_err_t lastError_;                           ///< Last error code
     
-    BLEClient* client_;                        ///< BLE client instance
-    BLEServer* server_;                        ///< BLE server instance
+    BLEClient* client_;                             ///< BLE client instance
+    BLEServer* server_;                             ///< BLE server instance
     
-    bool clientInitialized_;                  ///< Client initialization status
-    bool serverInitialized_;                  ///< Server initialization status
-    bool commonInitialized_;                  ///< Common BLE stack initialization status
+    bool clientInitialized_;                        ///< Client initialization status
+    bool serverInitialized_;                        ///< Server initialization status
+    bool commonInitialized_;                        ///< Common BLE stack initialization status
     
-    uint64_t initTime_;                       ///< Library initialization timestamp
-    uint64_t startTime_;                      ///< Library start timestamp
+    uint64_t initTime_;                             ///< Library initialization timestamp
+    uint64_t startTime_;                            ///< Library start timestamp
     
     // Callbacks
-    ble_event_callback_t eventCallback_;      ///< Global event callback
-    ble_log_callback_t logCallback_;          ///< Custom log callback
+    bleEventCB_t eventCallback_;                    ///< Global event callback
     
     // Synchronization
-    SemaphoreHandle_t stateMutex_;            ///< State protection mutex
+    SemaphoreHandle_t stateMutex_;                  ///< State protection mutex
 
     // Tasks
-    TaskHandle_t watchdogTaskHandle_;         ///< Watchdog task handle
+    TaskHandle_t watchdogTaskHandle_;               ///< Watchdog task handle
 
     // Statistics
-    uint32_t restartCount_;                   ///< Number of restarts
-    uint64_t totalUpTime_;                    ///< Total uptime across restarts
+    uint32_t restartCount_;                         ///< Number of restarts
+    uint64_t totalUpTime_;                          ///< Total uptime across restarts
 };
 
 /**

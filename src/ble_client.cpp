@@ -1,15 +1,14 @@
 /*******************************************************************************
- * @file BLEClient.cpp
+ * @file ble_client.cpp
  * @brief Implementation of BLE client functionality including scanning,
  * connecting, and data communication with BLE servers.
  *
- * @version 0.0.6
- * @date 2025-06-26
+ * @version 0.0.5
+ * @date 2025-06-24
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
-
-#include "BLEClient.hpp"
+#include "ble_client.hpp"
 
 #include "esp_random.h"
 
@@ -17,10 +16,11 @@
 /*                              Static Variables                              */
 /******************************************************************************/
 
-BLEClient* BLEClient::s_instance = nullptr;
+static const char* TAG = "BLE_CLIENT";
+BLEClient* BLEClient::instance_ = nullptr;
 
 // Default scan parameters
-static esp_ble_scan_params_t s_defaultScanParams = {
+static esp_ble_scan_params_t defaultScanParams = {
     .scan_type              = BLE_SCAN_TYPE_ACTIVE,
     .own_addr_type          = BLE_ADDR_TYPE_PUBLIC,
     .scan_filter_policy     = BLE_SCAN_FILTER_ALLOW_ALL,
@@ -62,7 +62,7 @@ BLEClient::BLEClient()
 
     // Initialize default configuration
     memset(&config_, 0, sizeof(config_));
-    strncpy(config_.targetDeviceName, "154_BLE_Server", BLE_MAX_DEVICE_NAME_LEN - 1);
+    strncpy(config_.targetDeviceName, "SenseAI_BLE", BLE_MAX_DEVICE_NAME_LEN - 1);
     config_.scanTimeout = BLE_DEFAULT_SCAN_TIMEOUT;
     config_.autoReconnect = true;
     config_.reconnectInterval = BLE_DEFAULT_RECONNECT_TIME;
@@ -71,7 +71,7 @@ BLEClient::BLEClient()
     config_.readInterval = 5000;
 
     // Initialize security configuration
-    ble_create_default_security_config(&securityConfig_, BLE_SECURITY_NONE);
+    bleCreateDefaultSecurityConfig(&securityConfig_, BLE_SECURITY_BASIC);
 
     // Initialize device and data structures
     memset(&connectedDevice_, 0, sizeof(connectedDevice_));
@@ -85,18 +85,18 @@ BLEClient::BLEClient()
     stateMutex_ = xSemaphoreCreateMutex();
     
     // Set static instance for callbacks
-    s_instance = this;
+    instance_ = this;
 
-    ble_log(ESP_LOG_INFO, "BLE Client created");
+    ESP_LOGI(TAG, "BLE Client created");
 }
 
-BLEClient::BLEClient(const ble_client_config_t& config) : BLEClient() {
+BLEClient::BLEClient(const bleClientConfig_t& config) : BLEClient() {
     config_ = config;
-    ble_log(ESP_LOG_INFO, "BLE Client created with custom configuration");
+    ESP_LOGI(TAG, "BLE Client created with custom configuration");
 }
 
 BLEClient::~BLEClient() {
-    ble_log(ESP_LOG_INFO, "Destroying BLE Client");
+    ESP_LOGI(TAG, "Destroying BLE Client");
 
     // Stop tasks
     if (dataReadTaskHandle_ != nullptr) {
@@ -117,8 +117,8 @@ BLEClient::~BLEClient() {
     }
 
     // Clear static instance
-    if (s_instance == this) {
-        s_instance = nullptr;
+    if (instance_ == this) {
+        instance_ = nullptr;
     }
 }
 
@@ -127,7 +127,7 @@ BLEClient::~BLEClient() {
 /******************************************************************************/
 
 esp_err_t BLEClient::init() {
-    ble_log(ESP_LOG_INFO, "Initializing BLE Client");
+    ESP_LOGI(TAG, "Initializing BLE Client");
 
     if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
@@ -138,7 +138,7 @@ esp_err_t BLEClient::init() {
     // Register GAP callback
     ret = esp_ble_gap_register_callback(gapCallback);
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to register GAP callback: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to register GAP callback: %s", esp_err_to_name(ret));
         xSemaphoreGive(stateMutex_);
         return ret;
     }
@@ -146,7 +146,7 @@ esp_err_t BLEClient::init() {
     // Register GATTC callback
     ret = esp_ble_gattc_register_callback(gattcCallback);
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to register GATTC callback: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to register GATTC callback: %s", esp_err_to_name(ret));
         xSemaphoreGive(stateMutex_);
         return ret;
     }
@@ -154,7 +154,7 @@ esp_err_t BLEClient::init() {
     // Register GATTC application
     ret = esp_ble_gattc_app_register(0x56);  // App ID
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to register GATTC app: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to register GATTC app: %s", esp_err_to_name(ret));
         xSemaphoreGive(stateMutex_);
         return ret;
     }
@@ -162,12 +162,12 @@ esp_err_t BLEClient::init() {
     state_ = BLE_CLIENT_IDLE;
     xSemaphoreGive(stateMutex_);
 
-    ble_log(ESP_LOG_INFO, "BLE Client initialized successfully");
+    ESP_LOGI(TAG, "BLE Client initialized successfully");
     return ESP_OK;
 }
 
-esp_err_t BLEClient::setMacTarget(const esp_bd_addr_t _serverMACadd) {
-    if (_serverMACadd == nullptr) {
+esp_err_t BLEClient::setMacTarget(const esp_bd_addr_t serverMACadd) {
+    if (serverMACadd == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -175,23 +175,23 @@ esp_err_t BLEClient::setMacTarget(const esp_bd_addr_t _serverMACadd) {
         return ESP_ERR_TIMEOUT;
     }
 
-    memcpy(config_.targetServerMACadd, _serverMACadd, ESP_BD_ADDR_LEN);
+    memcpy(config_.targetServerMACadd, serverMACadd, ESP_BD_ADDR_LEN);
     xSemaphoreGive(stateMutex_);
 
-    char addrStr[18];
-    ble_addr_to_string((uint8_t*)_serverMACadd, addrStr);
-    ble_log(ESP_LOG_INFO, "Target MAC address set to: %s", addrStr);
+    char macStr[18];
+    bleMacaddToString((uint8_t*)serverMACadd, macStr);
+    ESP_LOGI(TAG, "Target MAC address set to: %s", macStr);
     
     return ESP_OK;
 }
 
 esp_err_t BLEClient::startScan() {
     char macStr[18];
-    ble_addr_to_string((uint8_t*)config_.targetServerMACadd, macStr);
-    ble_log(ESP_LOG_INFO, "Starting BLE scan for target MAC: %s", macStr);
+    bleMacaddToString((uint8_t*)config_.targetServerMACadd, macStr);
+    ESP_LOGI(TAG, "Starting BLE scan for target MAC: %s", macStr);
 
     if (state_ == BLE_CLIENT_SCANNING) {
-        ble_log(ESP_LOG_WARN, "Already scanning");
+        ESP_LOGW(TAG, "Already scanning");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -205,9 +205,9 @@ esp_err_t BLEClient::startScan() {
     xSemaphoreGive(stateMutex_);
 
     // Set scan parameters
-    esp_err_t ret = esp_ble_gap_set_scan_params(&s_defaultScanParams);
+    esp_err_t ret = esp_ble_gap_set_scan_params(&defaultScanParams);
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to set scan params: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to set scan params: %s", esp_err_to_name(ret));
         state_ = BLE_CLIENT_IDLE;
         return ret;
     }
@@ -216,20 +216,20 @@ esp_err_t BLEClient::startScan() {
 }
 
 esp_err_t BLEClient::stopScan() {
-    ble_log(ESP_LOG_INFO, "Stopping BLE scan");
+    ESP_LOGI(TAG, "Stopping BLE scan");
     
     return esp_ble_gap_stop_scanning();
 }
 
 esp_err_t BLEClient::connect(const esp_bd_addr_t serverMACadd) {
     if (state_ == BLE_CLIENT_CONNECTED || state_ == BLE_CLIENT_CONNECTING) {
-        ble_log(ESP_LOG_WARN, "Already connected or connecting");
+        ESP_LOGW(TAG, "Already connected or connecting");
         return ESP_ERR_INVALID_STATE;
     }
 
-    char macAddrStr[18];
-    ble_addr_to_string((uint8_t*)serverMACadd, macAddrStr);
-    ble_log(ESP_LOG_INFO, "Connecting to server: %s", macAddrStr);
+    char MACaddStr[18];
+    bleMacaddToString((uint8_t*)serverMACadd, MACaddStr);
+    ESP_LOGI(TAG, "Connecting to server: %s", MACaddStr);
 
     if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
@@ -237,7 +237,7 @@ esp_err_t BLEClient::connect(const esp_bd_addr_t serverMACadd) {
 
     state_ = BLE_CLIENT_CONNECTING;
     stats_.connectionAttempts++;
-    connectionStartTime_ = ble_get_timestamp();
+    connectionStartTime_ = bleGetTimestamp();
     
     // Copy server address
     memcpy(connectedDevice_.address, serverMACadd, ESP_BD_ADDR_LEN);
@@ -245,11 +245,9 @@ esp_err_t BLEClient::connect(const esp_bd_addr_t serverMACadd) {
     xSemaphoreGive(stateMutex_);
 
     // Attempt connection
-    esp_err_t ret = esp_ble_gattc_open(gattCInter_, (uint8_t*)serverMACadd, 
-                                       BLE_ADDR_TYPE_PUBLIC, true);
+    esp_err_t ret = esp_ble_gattc_open(gattCInter_, (uint8_t*)serverMACadd, BLE_ADDR_TYPE_PUBLIC, true);
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to initiate connection: %s", 
-                esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to initiate connection: %s", esp_err_to_name(ret));
         state_ = BLE_CLIENT_IDLE;
         return ret;
     }
@@ -259,12 +257,11 @@ esp_err_t BLEClient::connect(const esp_bd_addr_t serverMACadd) {
 
 esp_err_t BLEClient::disconnect(bool planned) {
     if (!isConnected()) {
-        ble_log(ESP_LOG_WARN, "Not connected");
+        ESP_LOGW(TAG, "Not connected");
         return ESP_ERR_INVALID_STATE;
     }
 
-    ble_log(ESP_LOG_INFO, "Disconnecting from server (planned: %s)", 
-            planned ? "yes" : "no");
+    ESP_LOGI(TAG, "Disconnecting from server (planned: %s)", planned ? "yes" : "no");
 
     if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
@@ -275,7 +272,7 @@ esp_err_t BLEClient::disconnect(bool planned) {
 
     esp_err_t ret = esp_ble_gattc_close(gattCInter_, connID_);
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to disconnect: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to disconnect: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -287,13 +284,11 @@ esp_err_t BLEClient::readBatteryLevel() {
         return ESP_ERR_INVALID_STATE;
     }
 
-    ble_log(ESP_LOG_DEBUG, "Reading battery level");
+    ESP_LOGD(TAG, "Reading battery level");
 
-    esp_err_t ret = esp_ble_gattc_read_char(gattCInter_, connID_, batteryCharHandle_, 
-                                           ESP_GATT_AUTH_REQ_NONE);
+    esp_err_t ret = esp_ble_gattc_read_char(gattCInter_, connID_, batteryCharHandle_, ESP_GATT_AUTH_REQ_NONE);
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to read battery characteristic: %s", 
-                esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to read battery characteristic: %s", esp_err_to_name(ret));
     }
     
     return ret;
@@ -304,13 +299,11 @@ esp_err_t BLEClient::readCustomData() {
         return ESP_ERR_INVALID_STATE;
     }
 
-    ble_log(ESP_LOG_DEBUG, "Reading custom data");
+    ESP_LOGD(TAG, "Reading custom data");
 
-    esp_err_t ret = esp_ble_gattc_read_char(gattCInter_, connID_, customCharHandle_, 
-                                           ESP_GATT_AUTH_REQ_NONE);
+    esp_err_t ret = esp_ble_gattc_read_char(gattCInter_, connID_, customCharHandle_, ESP_GATT_AUTH_REQ_NONE);
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to read custom characteristic: %s", 
-                esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to read custom characteristic: %s", esp_err_to_name(ret));
     }
     
     return ret;
@@ -323,19 +316,17 @@ esp_err_t BLEClient::writeCustomData(const char* data) {
 
     size_t dataLen = strlen(data);
     if (dataLen > BLE_MAX_CUSTOM_DATA_LEN - 1) {
-        ble_log(ESP_LOG_WARN, "Data too long, truncating");
+        ESP_LOGW(TAG, "Data too long, truncating");
         dataLen = BLE_MAX_CUSTOM_DATA_LEN - 1;
     }
 
-    ble_log(ESP_LOG_DEBUG, "Writing custom data: %.*s", (int)dataLen, data);
+    ESP_LOGD(TAG, "Writing custom data: %.*s", (int)dataLen, data);
 
     esp_err_t ret = esp_ble_gattc_write_char(gattCInter_, connID_, customCharHandle_,
                                            dataLen, (uint8_t*)data,
-                                           ESP_GATT_WRITE_TYPE_RSP, 
-                                           ESP_GATT_AUTH_REQ_NONE);
+                                           ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to write custom characteristic: %s", 
-                esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to write custom characteristic: %s", esp_err_to_name(ret));
     } else {
         stats_.dataSent++;
     }
@@ -348,7 +339,8 @@ esp_err_t BLEClient::setNotifications(bool enable) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    ble_log(ESP_LOG_INFO, "%s notifications", enable ? "Enabling" : "Disabling");
+    ESP_LOGI(TAG, "%s notifications", enable ? "Enabling" : "Disabling");
+    
     
     return ESP_OK;
 }
@@ -357,82 +349,94 @@ esp_err_t BLEClient::setNotifications(bool enable) {
 /*                           Configuration Methods                            */
 /******************************************************************************/
 
-esp_err_t BLEClient::setConfig(const ble_client_config_t& config) {
+esp_err_t BLEClient::setConfig(const bleClientConfig_t& config) {
     if (isConnected()) {
-        ble_log(ESP_LOG_WARN, "Cannot change config while connected");
+        ESP_LOGW(TAG, "Cannot change config while connected");
         return ESP_ERR_INVALID_STATE;
     }
 
     config_ = config;
-    ble_log(ESP_LOG_INFO, "Client configuration updated");
+    ESP_LOGI(TAG, "Client configuration updated");
     return ESP_OK;
 }
 
-ble_client_config_t BLEClient::getConfig() const {
+esp_err_t BLEClient::setSecurityConfig(const bleSecurityConfig_t& securityConfig) {
+    if (isConnected()) {
+        ESP_LOGW(TAG, "Cannot change security config while connected");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    securityConfig_ = securityConfig;
+    ESP_LOGI(TAG, "Security configuration updated:");
+    ESP_LOGI(TAG, "  Level: %d", securityConfig_.level);
+    ESP_LOGI(TAG, "  Use Custom UUIDs: %s", securityConfig_.useCustomUUIDS ? "YES" : "NO");
+    ESP_LOGI(TAG, "  Require Authentication: %s", securityConfig_.requireAuthentication ? "YES" : "NO");
+    return ESP_OK;
+}
+
+bleClientConfig_t BLEClient::getConfig() const {
     return config_;
 }
 
 esp_err_t BLEClient::setTargetDevice(const char* deviceName) {
-    if (deviceName == nullptr || !ble_validate_device_name(deviceName)) {
+    if (deviceName == nullptr || !bleValidateDeviceName(deviceName)) {
         return ESP_ERR_INVALID_ARG;
     }
 
     strncpy(config_.targetDeviceName, deviceName, BLE_MAX_DEVICE_NAME_LEN - 1);
     config_.targetDeviceName[BLE_MAX_DEVICE_NAME_LEN - 1] = '\0';
 
-    ble_log(ESP_LOG_INFO, "Target device set to: %s", config_.targetDeviceName);
+    ESP_LOGI(TAG, "Target device set to: %s", config_.targetDeviceName);
     return ESP_OK;
 }
+
 
 /******************************************************************************/
 /*                            Callback Registration                           */
 /******************************************************************************/
 
-void BLEClient::setConnectedCallback(ble_client_connected_cb_t callback) {
+void BLEClient::setConnectedCallback(bleClientConnectedCB_t callback) {
     connectedCB_ = callback;
-    ble_log(ESP_LOG_DEBUG, "Connected callback registered");
+    ESP_LOGD(TAG, "Connected callback registered");
 }
 
-void BLEClient::setDisconnectedCallback(ble_client_disconnected_cb_t callback) {
+void BLEClient::setDisconnectedCallback(bleClientDisconnectedCB_t callback) {
     disconnectedCB_ = callback;
-    ble_log(ESP_LOG_DEBUG, "Disconnected callback registered");
+    ESP_LOGD(TAG, "Disconnected callback registered");
 }
 
-void BLEClient::setDataReceivedCallback(ble_client_data_received_cb_t callback) {
+void BLEClient::setDataReceivedCallback(bleClientDataReceivedCB_t callback) {
     dataReceivedCB_ = callback;
-    ble_log(ESP_LOG_DEBUG, "Data received callback registered");
+    ESP_LOGD(TAG, "Data received callback registered");
 }
 
-void BLEClient::setDeviceFoundCallback(ble_client_device_found_cb_t callback) {
+void BLEClient::setDeviceFoundCallback(bleClientDeviceFoundCB_t callback) {
     deviceFoundCB_ = callback;
-    ble_log(ESP_LOG_DEBUG, "Device found callback registered");
+    ESP_LOGD(TAG, "Device found callback registered");
 }
 
-void BLEClient::setAuthCallback(ble_client_auth_cb_t callback) {
+void BLEClient::setAuthCallback(bleClientAuthCB_t callback) {
     authCB_ = callback;
-    ble_log(ESP_LOG_DEBUG, "Authentication callback registered");
+    ESP_LOGD(TAG, "Authentication callback registered");
 }
 
-void BLEClient::setAnyDeviceFoundCallback(ble_client_any_device_found_cb_t callback) {
+void BLEClient::setAnyDeviceFoundCallback(bleClientAnyDeviceFoundCB_t callback) {
     anyDeviceFoundCB_ = callback;
-    ble_log(ESP_LOG_DEBUG, "Any device found callback registered");
+    ESP_LOGD(TAG, "Any device found callback registered");
 }
 
-void BLEClient::setScanStartedCallback(ble_client_scan_started_cb_t callback) {
+void BLEClient::setScanStartedCallback(bleClientScanStartedCB_t callback) {
     scanStartedCB_ = callback;
-    ble_log(ESP_LOG_DEBUG, "Scan started callback registered");
+    ESP_LOGD(TAG, "Scan started callback registered");
 }
 
-void BLEClient::setScanCompletedCallback(ble_client_scan_completed_cb_t callback) {
+void BLEClient::setScanCompletedCallback(bleClientScanCompletedCB_t callback) {
     scanCompletedCB_ = callback;
-    ble_log(ESP_LOG_DEBUG, "Scan completed callback registered");
+    ESP_LOGD(TAG, "Scan completed callback registered");
 }
 
-/******************************************************************************/
-/*                              Status Methods                                */
-/******************************************************************************/
 
-ble_client_state_t BLEClient::getState() const {
+bleClientState_t BLEClient::getState() const {
     return state_;
 }
 
@@ -445,20 +449,20 @@ bool BLEClient::isScanning() const {
     return state_ == BLE_CLIENT_SCANNING;
 }
 
-const ble_device_info_t* BLEClient::getConnectedDevice() const {
+const bleDeviceInfo_t* BLEClient::kgetConnectedDevice() const {
     return isConnected() ? &connectedDevice_ : nullptr;
 }
 
-const ble_data_packet_t* BLEClient::getLastData() const {
+const bleDataPacket_t* BLEClient::kgetLastData() const {
     return lastData_.valid ? &lastData_ : nullptr;
 }
 
-ble_client_stats_t BLEClient::getStats() const {
-    ble_client_stats_t stats = stats_;
+bleClientStats_t BLEClient::getStats() const {
+    bleClientStats_t stats = stats_;
     
     // Update uptime if connected
     if (isConnected() && connectionStartTime_ > 0) {
-        stats.totalUptime = (ble_get_timestamp() - connectionStartTime_) / 1000;
+        stats.totalUptime = (bleGetTimestamp() - connectionStartTime_) / 1000;
     }
     
     return stats;
@@ -466,10 +470,10 @@ ble_client_stats_t BLEClient::getStats() const {
 
 void BLEClient::resetStats() {
     memset(&stats_, 0, sizeof(stats_));
-    ble_log(ESP_LOG_INFO, "Client statistics reset");
+    ESP_LOGI(TAG, "Client statistics reset");
 }
 
-const char* BLEClient::getStateString() const {
+const char* BLEClient::kgetStateString() const {
     switch (state_) {
         case BLE_CLIENT_IDLE: return "IDLE";
         case BLE_CLIENT_SCANNING: return "SCANNING";
@@ -483,20 +487,20 @@ const char* BLEClient::getStateString() const {
     }
 }
 
-uint8_t BLEClient::getConnectionQuality() const {
-    if (!isConnected()) {
-        return 0;
-    }
+// uint8_t BLEClient::getConnectionQuality() const {
+//     if (!isConnected()) {
+//         return 0;
+//     }
 
-    return ble_rssi_to_quality(connectedDevice_.rssi);
-}
+//     return bleRSSIToQuality(connectedDevice_.rssi);
+// }
 
 uint64_t BLEClient::getConnectionUptime() const {
     if (!isConnected() || connectionStartTime_ == 0) {
         return 0;
     }
 
-    return (ble_get_timestamp() - connectionStartTime_) / 1000;
+    return (bleGetTimestamp() - connectionStartTime_) / 1000;
 }
 
 bool BLEClient::performHealthCheck() {
@@ -505,52 +509,183 @@ bool BLEClient::performHealthCheck() {
     }
     
     if (isConnected() && lastDataTime_ > 0) {
-        uint64_t timeSinceData = (ble_get_timestamp() - lastDataTime_) / 1000;
+        uint64_t timeSinceData = (bleGetTimestamp() - lastDataTime_) / 1000;
         if (timeSinceData > 30000) {  // 30 seconds
-            ble_log(ESP_LOG_WARN, "No data received for %llu ms", timeSinceData);
+            ESP_LOGW(TAG, "No data received for %llu ms", timeSinceData);
             return false;
         }
     }
+    
     return true;
 }
 
 /******************************************************************************/
-/*                              Static Callbacks                              */
+/*                          NUEVOS MÉTODOS EXTENDIDOS                        */
 /******************************************************************************/
 
+esp_err_t BLEClient::startDiscoveryScan(uint32_t duration) {
+    ESP_LOGI(TAG, "Starting discovery scan for %lu ms (all devices)", duration);
+
+    if (state_ == BLE_CLIENT_SCANNING) {
+        ESP_LOGW(TAG, "Already scanning");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    discoveryMode_ = true;
+    currentScanDuration_ = duration;
+    scanStartTime_ = bleGetTimestamp();
+    targetDeviceFoundInScan_ = false;
+
+    state_ = BLE_CLIENT_SCANNING;
+    stats_.scanCount++;
+
+    xSemaphoreGive(stateMutex_);
+
+    if (scanStartedCB_ != nullptr) {
+        scanStartedCB_(duration);
+    }
+
+    esp_err_t ret = esp_ble_gap_set_scan_params(&defaultScanParams);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set scan params: %s", esp_err_to_name(ret));
+        state_ = BLE_CLIENT_IDLE;
+        discoveryMode_ = false;
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t BLEClient::startTargetedScan() {
+    char macStr[18];
+    bleMacaddToString((uint8_t*)config_.targetServerMACadd, macStr);
+    ESP_LOGI(TAG, "Starting targeted scan for MAC: %s", macStr);
+
+    if (state_ == BLE_CLIENT_SCANNING) {
+        ESP_LOGW(TAG, "Already scanning");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // Configurar modo targeted (normal)
+    discoveryMode_ = false;
+    currentScanDuration_ = config_.scanTimeout;
+    scanStartTime_ = bleGetTimestamp();
+    targetDeviceFoundInScan_ = false;
+
+    state_ = BLE_CLIENT_SCANNING;
+    stats_.scanCount++;
+
+    xSemaphoreGive(stateMutex_);
+
+    ESP_LOGI(TAG, "Scan configured:");
+    ESP_LOGI(TAG, "  Target MAC: %s", macStr);
+    ESP_LOGI(TAG, "  Duration: %lu ms", config_.scanTimeout);
+
+    if (scanStartedCB_ != nullptr) {
+        scanStartedCB_(config_.scanTimeout);
+    }
+
+    esp_err_t ret = esp_ble_gap_set_scan_params(&defaultScanParams);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set scan params: %s", esp_err_to_name(ret));
+        state_ = BLE_CLIENT_IDLE;
+        discoveryMode_ = false;
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Targeted MAC scan started successfully");
+    return ESP_OK;
+}
+
+void BLEClient::setScanMode(bool discoveryMode) {
+    discoveryMode_ = discoveryMode;
+    ESP_LOGI(TAG, "Scan mode set to: %s", discoveryMode ? "DISCOVERY" : "TARGETED");
+}
+
+uint32_t BLEClient::getUniqueDevicesFound() const {
+    return foundDevicesCount_;
+}
+
+void BLEClient::clearDeviceList() {
+    foundDevicesCount_ = 0;
+    memset(foundDevices_, 0, sizeof(foundDevices_));
+    ESP_LOGI(TAG, "Device list cleared");
+}
+
+const bleDeviceInfo_t* BLEClient::kgetFoundDevice(uint32_t index) const {
+    if (index >= foundDevicesCount_) {
+        return nullptr;
+    }
+    return &foundDevices_[index];
+}
+
+bool BLEClient::addToFoundDevices(const bleDeviceInfo_t* deviceInfo) {
+    if (deviceInfo == nullptr || foundDevicesCount_ >= kMaxFoundDevices) {
+        return false;
+    }
+
+    if (isDeviceAlreadyFound(deviceInfo->address)) {
+        return false; // Ya existe
+    }
+
+    // Agregar nuevo dispositivo
+    memcpy(&foundDevices_[foundDevicesCount_], deviceInfo, sizeof(bleDeviceInfo_t));
+    foundDevicesCount_++;
+
+    ESP_LOGD(TAG, "Added device to list: %s (total: %lu)", 
+            deviceInfo->name, foundDevicesCount_);
+    return true;
+}
+
+bool BLEClient::isDeviceAlreadyFound(const esp_bd_addr_t address) const {
+    for (uint32_t i = 0; i < foundDevicesCount_; i++) {
+        if (memcmp(foundDevices_[i].address, address, ESP_BD_ADDR_LEN) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void BLEClient::gapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
-    if (s_instance == nullptr) {
+    if (instance_ == nullptr) {
         return;
     }
     
     switch (event) {
         case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
-            ble_log(ESP_LOG_DEBUG, "Scan parameters set");
+            ESP_LOGD(TAG, "Scan parameters set");
             if (param->scan_param_cmpl.status == ESP_BT_STATUS_SUCCESS) {
-                esp_ble_gap_start_scanning(s_instance->currentScanDuration_ > 0 ? 
-                                          s_instance->currentScanDuration_ / 1000 : 
-                                          s_instance->config_.scanTimeout / 1000);
+                esp_ble_gap_start_scanning(instance_->currentScanDuration_ > 0 ? 
+                                          instance_->currentScanDuration_ / 1000 : 
+                                          instance_->config_.scanTimeout / 1000);
             }
             break;
             
         case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
             if (param->scan_start_cmpl.status != ESP_BT_STATUS_SUCCESS) {
-                ble_log(ESP_LOG_ERROR, "Scan start failed: %d", 
-                        param->scan_start_cmpl.status);
-                s_instance->state_ = BLE_CLIENT_IDLE;
+                ESP_LOGE(TAG, "Scan start failed: %d", param->scan_start_cmpl.status);
+                instance_->state_ = BLE_CLIENT_IDLE;
             } else {
-                ble_log(ESP_LOG_INFO, "Scan started successfully");
+                ESP_LOGI(TAG, "Scan started successfully");
             }
             break;
             
         case ESP_GAP_BLE_SCAN_RESULT_EVT:
-            s_instance->handleScanResult(param);
+            instance_->handleScanResult(param);
             break;
             
         case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
-            ble_log(ESP_LOG_DEBUG, "Scan stopped");
-            if (s_instance->state_ == BLE_CLIENT_SCANNING) {
-                s_instance->state_ = BLE_CLIENT_IDLE;
+            ESP_LOGD(TAG, "Scan stopped");
+            if (instance_->state_ == BLE_CLIENT_SCANNING) {
+                instance_->state_ = BLE_CLIENT_IDLE;
             }
             break;
             
@@ -561,53 +696,48 @@ void BLEClient::gapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t
 
 void BLEClient::gattcCallback(esp_gattc_cb_event_t event, esp_gatt_if_t gattCInter, 
                              esp_ble_gattc_cb_param_t *param) {
-    if (s_instance == nullptr) {
+    if (instance_ == nullptr) {
         return;
     }
     
     switch (event) {
         case ESP_GATTC_REG_EVT:
-            ble_log(ESP_LOG_DEBUG, "GATTC registered, app_id: %04x", 
-                    param->reg.app_id);
-            s_instance->gattCInter_ = gattCInter;
+            ESP_LOGD(TAG, "GATTC registered, app_id: %04x", param->reg.app_id);
+            instance_->gattCInter_ = gattCInter;
             break;
             
         case ESP_GATTC_CONNECT_EVT:
-            s_instance->handleConnect(param);
+            instance_->handleConnect(param);
             break;
             
         case ESP_GATTC_DISCONNECT_EVT:
-            s_instance->handleDisconnect(param);
+            instance_->handleDisconnect(param);
             break;
             
         case ESP_GATTC_SEARCH_RES_EVT:
-            s_instance->handleServiceFound(param);
+            instance_->handleServiceFound(param);
             break;
             
         case ESP_GATTC_SEARCH_CMPL_EVT:
-            s_instance->handleServiceDiscoveryComplete(param);
+            instance_->handleServiceDiscoveryComplete(param);
             break;
             
         case ESP_GATTC_READ_CHAR_EVT:
-            s_instance->handleCharacteristicRead(param);
+            instance_->handleCharacteristicRead(param);
             break;
             
         case ESP_GATTC_WRITE_CHAR_EVT:
-            s_instance->handleCharacteristicWrite(param);
+            instance_->handleCharacteristicWrite(param);
             break;
             
         case ESP_GATTC_NOTIFY_EVT:
-            s_instance->handleNotification(param);
+            instance_->handleNotification(param);
             break;
             
         default:
             break;
     }
 }
-
-/******************************************************************************/
-/*                              Protected Methods                             */
-/******************************************************************************/
 
 bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
     bool hasTargetService = false;
@@ -625,7 +755,7 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
             uint8_t type = advData[i + 1];
 
             if (type == 0x07 && length == 17) {  // Complete list of 128-bit service UUIDs
-                if (ble_compare_uuid128(&advData[i + 2], securityConfig_.serviceUUID)) {
+                if (bleCompareUUID128(&advData[i + 2], securityConfig_.serviceUUID)) {
                     hasTargetService = true;
                     break;
                 }
@@ -654,20 +784,24 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
 
     bool finalResult = macMatch && securityOk;
 
-    // Debug logging simplified - ONLY MAC
+    // Debug logging simplificado - ONLY MAC
     char foundMac[18], targetMac[18];
-    ble_addr_to_string(scanResult->scan_rst.bda, foundMac);
-    ble_addr_to_string((uint8_t*)config_.targetServerMACadd, targetMac);
+    bleMacaddToString(scanResult->scan_rst.bda, foundMac);
+    bleMacaddToString((uint8_t*)config_.targetServerMACadd, targetMac);
 
-    ble_log(ESP_LOG_INFO, "=== MAC-Based Device Verification ===");
-    ble_log(ESP_LOG_INFO, "Found MAC: %s", foundMac);
-    ble_log(ESP_LOG_INFO, "Target MAC: %s", targetMac);
-    ble_log(ESP_LOG_INFO, "RSSI: %d dBm", scanResult->scan_rst.rssi);
-    ble_log(ESP_LOG_INFO, "Verification Results:");
-    ble_log(ESP_LOG_INFO, "  MAC match: %s", macMatch ? "YES" : "NO");
-    ble_log(ESP_LOG_INFO, "  Security OK: %s", securityOk ? "YES" : "NO");
-    ble_log(ESP_LOG_INFO, "  FINAL RESULT: %s", finalResult ? "TARGET VERIFIED" : "NOT TARGET");
-    ble_log(ESP_LOG_INFO, "====================================");
+    ESP_LOGI(TAG, "=== MAC-Based Device Verification ===");
+    ESP_LOGI(TAG, "Found MAC: %s", foundMac);
+    ESP_LOGI(TAG, "Target MAC: %s", targetMac);
+    ESP_LOGI(TAG, "RSSI: %d dBm", scanResult->scan_rst.rssi);
+    ESP_LOGI(TAG, "Security Configuration:");
+    ESP_LOGI(TAG, "  Level: %d", securityConfig_.level);
+    ESP_LOGI(TAG, "  Use Custom UUIDs: %s", securityConfig_.useCustomUUIDS ? "YES" : "NO");
+    ESP_LOGI(TAG, "  Has Target Service: %s", hasTargetService ? "YES" : "NO");
+    ESP_LOGI(TAG, "Verification Results:");
+    ESP_LOGI(TAG, "  MAC match: %s", macMatch ? "YES" : "NO");
+    ESP_LOGI(TAG, "  Security OK: %s", securityOk ? "YES" : "NO");
+    ESP_LOGI(TAG, "  FINAL RESULT: %s", finalResult ? "TARGET VERIFIED" : "NOT TARGET");
+    ESP_LOGI(TAG, "====================================");
 
     return finalResult;
 }
@@ -677,31 +811,35 @@ esp_err_t BLEClient::authenticateWithServer() {
         return ESP_OK;
     }
     
-    ble_log(ESP_LOG_INFO, "Authenticating with server");
+    ESP_LOGI(TAG, "Authenticating with server");
     
     state_ = BLE_CLIENT_AUTHENTICATING;
     
     // Send authentication key
     esp_err_t ret = writeCustomData(securityConfig_.authKey);
     if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to send authentication: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to send authentication: %s", esp_err_to_name(ret));
         return ret;
     }
     
     return ESP_OK;
 }
 
+/******************************************************************************/
+/*                       MÉTODO handleScanResult MODIFICADO                  */
+/******************************************************************************/
+
 void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
     esp_ble_gap_cb_param_t *scanResult = param;
 
     switch (scanResult->scan_rst.search_evt) {
         case ESP_GAP_SEARCH_INQ_RES_EVT: {
-            ble_device_info_t currentDevice;
+            bleDeviceInfo_t currentDevice;
             memset(&currentDevice, 0, sizeof(currentDevice));
             
             memcpy(currentDevice.address, scanResult->scan_rst.bda, ESP_BD_ADDR_LEN);
             currentDevice.rssi = scanResult->scan_rst.rssi;
-            currentDevice.lastSeen = ble_get_timestamp();
+            currentDevice.lastSeen = bleGetTimestamp();
             
             char deviceName[BLE_MAX_DEVICE_NAME_LEN] = {0};
             if (scanResult->scan_rst.adv_data_len > 0) {
@@ -714,8 +852,8 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
 
                     uint8_t type = advData[i + 1];
 
-                    // Search for device name
-                    if (type == 0x09 || type == 0x08) {  // Complete or shortened local name
+                    // Buscar nombre del dispositivo
+                    if (type == 0x09 || type == 0x08) {  // Complete o shortened local name                     REVISAR!!!
                         uint8_t nameLen = length - 1;
                         if (nameLen > BLE_MAX_DEVICE_NAME_LEN - 1) {
                             nameLen = BLE_MAX_DEVICE_NAME_LEN - 1;
@@ -735,9 +873,9 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
 
             strncpy(currentDevice.name, deviceName, BLE_MAX_DEVICE_NAME_LEN - 1);
 
-            bool isNewDevice = addToFoundDevices(&currentDevice);
+            // bool isNewDevice = addToFoundDevices(&currentDevice);
 
-            // Verify if it's the target device
+            // Verificar si es el dispositivo objetivo
             bool isTarget = verifyTargetDevice(scanResult);
             if (isTarget) {
                 targetDeviceFoundInScan_ = true;
@@ -747,24 +885,24 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
                 anyDeviceFoundCB_(&currentDevice, isTarget);
             }
             
-            // Original functionality: handle target device
+            // Funcionalidad original: manejar dispositivo objetivo
             if (isTarget) {
-                char macAddStr[18];
-                ble_addr_to_string(scanResult->scan_rst.bda, macAddStr);
+                char macStr[18];
+                bleMacaddToString(scanResult->scan_rst.bda, macStr);
 
-                ble_log(ESP_LOG_INFO, "Target device found: %s, RSSI: %d dBm",
-                        macAddStr, scanResult->scan_rst.rssi);
+                ESP_LOGI(TAG, "Target device found: %s, RSSI: %d dBm",
+                        macStr, scanResult->scan_rst.rssi);
 
-                // Update connected device information
-                memcpy(&connectedDevice_, &currentDevice, sizeof(ble_device_info_t));
+                // Actualizar información del dispositivo conectado
+                memcpy(&connectedDevice_, &currentDevice, sizeof(bleDeviceInfo_t));
 
-                // Call original device found callback
+                // Llamar callback original de dispositivo encontrado
                 bool shouldConnect = true;
                 if (deviceFoundCB_ != nullptr) {
                     deviceFoundCB_(&connectedDevice_, &shouldConnect);
                 }
                 
-                // Only connect if not in discovery mode and should connect
+                // Solo conectar si no estamos en modo discovery y se debe conectar
                 if (!discoveryMode_ && shouldConnect) {
                     esp_ble_gap_stop_scanning();
                     connect(scanResult->scan_rst.bda);
@@ -774,7 +912,7 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
         }
         
         case ESP_GAP_SEARCH_INQ_CMPL_EVT:
-            ble_log(ESP_LOG_INFO, "Scan completed - Found %lu unique devices (%s target)", 
+            ESP_LOGI(TAG, "Scan completed - Found %lu unique devices (%s target)", 
                     foundDevicesCount_, targetDeviceFoundInScan_ ? "WITH" : "WITHOUT");
             
             if (state_ == BLE_CLIENT_SCANNING) {
@@ -784,7 +922,7 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
                     scanCompletedCB_(foundDevicesCount_, targetDeviceFoundInScan_);
                 }
                 
-                // Auto-retry only in targeted mode and if target not found
+                // Auto-retry solo en modo targeted y si no se encontró el target
                 if (!discoveryMode_ && config_.autoReconnect && !targetDeviceFoundInScan_) {
                     vTaskDelay(pdMS_TO_TICKS(config_.reconnectInterval));
                     startTargetedScan();
@@ -798,25 +936,25 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
 }
 
 void BLEClient::handleConnect(esp_ble_gattc_cb_param_t *param) {
-    ble_log(ESP_LOG_INFO, "Connected to server, conn_id: %d", param->connect.conn_id);
+    ESP_LOGI(TAG, "Connected to server, conn_id: %d", param->connect.conn_id);
 
     connID_ = param->connect.conn_id;
     state_ = BLE_CLIENT_CONNECTED;
     stats_.successfulConnections++;
     
     // Start service discovery
-    ble_log(ESP_LOG_INFO, "Starting service discovery");
+    ESP_LOGI(TAG, "Starting service discovery");
     state_ = BLE_CLIENT_DISCOVERING;
     esp_ble_gattc_search_service(gattCInter_, connID_, nullptr);
 }
 
 void BLEClient::handleDisconnect(esp_ble_gattc_cb_param_t *param) {
-    ble_log(ESP_LOG_INFO, "Disconnected from server, reason: %d", param->disconnect.reason);
+    ESP_LOGI(TAG, "Disconnected from server, reason: %d", param->disconnect.reason);
     
     // Update statistics
     stats_.disconnections++;
     if (connectionStartTime_ > 0) {
-        stats_.totalUptime += (ble_get_timestamp() - connectionStartTime_) / 1000;
+        stats_.totalUptime += (bleGetTimestamp() - connectionStartTime_) / 1000;
     }
     
     // Reset connection state
@@ -833,37 +971,37 @@ void BLEClient::handleDisconnect(esp_ble_gattc_cb_param_t *param) {
     
     // Auto-reconnect if configured
     if (config_.autoReconnect) {
-        ble_log(ESP_LOG_INFO, "Scheduling reconnection in %lu ms", config_.reconnectInterval);
+        ESP_LOGI(TAG, "Scheduling reconnection in %lu ms", config_.reconnectInterval);
         vTaskDelay(pdMS_TO_TICKS(config_.reconnectInterval));
         startTargetedScan();
     }
 }
 
 void BLEClient::handleServiceFound(esp_ble_gattc_cb_param_t *param) {
-    ble_log(ESP_LOG_DEBUG, "Service found: UUID len %d", param->search_res.srvc_id.uuid.len);
+    ESP_LOGD(TAG, "Service found: UUID len %d", param->search_res.srvc_id.uuid.len);
     
     // Check if this is our target service
     bool serviceMatch = false;
 
     if (securityConfig_.useCustomUUIDS && param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_128) {
-        serviceMatch = ble_compare_uuid128(param->search_res.srvc_id.uuid.uuid.uuid128, 
+        serviceMatch = bleCompareUUID128(param->search_res.srvc_id.uuid.uuid.uuid128, 
                                           securityConfig_.serviceUUID);
     } else if (!securityConfig_.useCustomUUIDS && param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_16) {
         serviceMatch = (param->search_res.srvc_id.uuid.uuid.uuid16 == BLE_DEFAULT_SERVICE_UUID_16);
     }
     
     if (serviceMatch) {
-        ble_log(ESP_LOG_INFO, "Target service found");
+        ESP_LOGI(TAG, "Target service found");
         serviceStartHandle_ = param->search_res.start_handle;
         serviceEndHandle_ = param->search_res.end_handle;
     }
 }
 
 void BLEClient::handleServiceDiscoveryComplete(esp_ble_gattc_cb_param_t *param) {
-    ble_log(ESP_LOG_INFO, "Service discovery completed");
+    ESP_LOGI(TAG, "Service discovery completed");
     
     if (serviceStartHandle_ != 0) {
-        ble_log(ESP_LOG_INFO, "Discovering characteristics");
+        ESP_LOGI(TAG, "Discovering characteristics");
         
         uint16_t count = 10;
         esp_gattc_char_elem_t charElemResult[10];
@@ -874,29 +1012,29 @@ void BLEClient::handleServiceDiscoveryComplete(esp_ble_gattc_cb_param_t *param) 
                                                   charElemResult, &charCount, 0);
         
         if (ret == ESP_GATT_OK) {
-            ble_log(ESP_LOG_INFO, "Found %d characteristics", charCount);
+            ESP_LOGI(TAG, "Found %d characteristics", charCount);
             
             for (int i = 0; i < charCount; i++) {
-                esp_gattc_char_elem_t* charElem = &charElemResult[i];
+                esp_gattc_char_elem_t* char_elem = &charElemResult[i];
                 
                 bool isBattery = false;
                 bool isCustom = false;
-                if (securityConfig_.useCustomUUIDS && charElem->uuid.len == ESP_UUID_LEN_128) {
-                    isBattery = ble_compare_uuid128(charElem->uuid.uuid.uuid128, 
+                if (securityConfig_.useCustomUUIDS && char_elem->uuid.len == ESP_UUID_LEN_128) {
+                    isBattery = bleCompareUUID128(char_elem->uuid.uuid.uuid128, 
                                                    securityConfig_.batteryCharUUID);
-                    isCustom = ble_compare_uuid128(charElem->uuid.uuid.uuid128, 
+                    isCustom = bleCompareUUID128(char_elem->uuid.uuid.uuid128, 
                                                   securityConfig_.customCharUUID);
-                } else if (!securityConfig_.useCustomUUIDS && charElem->uuid.len == ESP_UUID_LEN_16) {
-                    isBattery = (charElem->uuid.uuid.uuid16 == BLE_DEFAULT_BATTERY_CHAR_UUID);
-                    isCustom = (charElem->uuid.uuid.uuid16 == BLE_DEFAULT_CUSTOM_CHAR_UUID);
+                } else if (!securityConfig_.useCustomUUIDS && char_elem->uuid.len == ESP_UUID_LEN_16) {
+                    isBattery = (char_elem->uuid.uuid.uuid16 == BLE_DEFAULT_BATTERY_CHAR_UUID);
+                    isCustom = (char_elem->uuid.uuid.uuid16 == BLE_DEFAULT_CUSTOM_CHAR_UUID);
                 }
                 
                 if (isBattery) {
-                    batteryCharHandle_ = charElem->char_handle;
-                    ble_log(ESP_LOG_INFO, "Battery characteristic found: handle=%d", batteryCharHandle_);
+                    batteryCharHandle_ = char_elem->char_handle;
+                    ESP_LOGI(TAG, "Battery characteristic found: handle=%d", batteryCharHandle_);
                 } else if (isCustom) {
-                    customCharHandle_ = charElem->char_handle;
-                    ble_log(ESP_LOG_INFO, "Custom characteristic found: handle=%d", customCharHandle_);
+                    customCharHandle_ = char_elem->char_handle;
+                    ESP_LOGI(TAG, "Custom characteristic found: handle=%d", customCharHandle_);
                 }
             }
             
@@ -914,42 +1052,42 @@ void BLEClient::handleServiceDiscoveryComplete(esp_ble_gattc_cb_param_t *param) 
                 }
             }
         } else {
-            ble_log(ESP_LOG_ERROR, "Failed to get characteristics: %s", esp_err_to_name(ret));
+            ESP_LOGE(TAG, "Failed to get characteristics: %s", esp_err_to_name(ret));
         }
     } else {
-        ble_log(ESP_LOG_ERROR, "Target service not found");
+        ESP_LOGE(TAG, "Target service not found");
         disconnect(false);
     }
 }
 
 void BLEClient::handleCharacteristicFound(esp_ble_gattc_cb_param_t *param) {
-    ble_log(ESP_LOG_DEBUG, "Characteristic event received");
+    ESP_LOGD(TAG, "Characteristic event received");
 }
 
 void BLEClient::handleAllCharacteristicsFound(esp_ble_gattc_cb_param_t *param) {
-    ble_log(ESP_LOG_DEBUG, "All characteristics event received");
+    ESP_LOGD(TAG, "All characteristics event received");
 }
 
 void BLEClient::handleCharacteristicRead(esp_ble_gattc_cb_param_t *param) {
     if (param->read.status != ESP_GATT_OK) {
-        ble_log(ESP_LOG_ERROR, "Read failed: %d", param->read.status);
+        ESP_LOGE(TAG, "Read failed: %d", param->read.status);
         return;
     }
     
     stats_.dataReceived++;
-    lastDataTime_ = ble_get_timestamp();
+    lastDataTime_ = bleGetTimestamp();
 
     if (param->read.handle == batteryCharHandle_) {
         lastData_.batteryLevel = param->read.value[0];
-        ble_log(ESP_LOG_INFO, "Battery level: %d%%", lastData_.batteryLevel);
+        ESP_LOGI(TAG, "Battery level: %d%%", lastData_.batteryLevel);
     } else if (param->read.handle == customCharHandle_) {
         memcpy(lastData_.customData, param->read.value, 
                param->read.value_len < BLE_MAX_CUSTOM_DATA_LEN ? param->read.value_len : BLE_MAX_CUSTOM_DATA_LEN - 1);
         lastData_.customData[param->read.value_len] = '\0';
-        ble_log(ESP_LOG_INFO, "Custom data: %s", lastData_.customData);
+        ESP_LOGI(TAG, "Custom data: %s", lastData_.customData);
     }
 
-    lastData_.timeStamp = ble_get_timestamp();
+    lastData_.timeStamp = bleGetTimestamp();
     lastData_.valid = true;
 
     if (dataReceivedCB_ != nullptr) {
@@ -959,35 +1097,35 @@ void BLEClient::handleCharacteristicRead(esp_ble_gattc_cb_param_t *param) {
 
 void BLEClient::handleCharacteristicWrite(esp_ble_gattc_cb_param_t *param) {
     if (param->write.status != ESP_GATT_OK) {
-        ble_log(ESP_LOG_ERROR, "Write failed: %d", param->write.status);
+        ESP_LOGE(TAG, "Write failed: %d", param->write.status);
         return;
     }
     
-    ble_log(ESP_LOG_DEBUG, "Write successful");
+    ESP_LOGD(TAG, "Write successful");
     
     if (state_ == BLE_CLIENT_AUTHENTICATING) {
-        ble_log(ESP_LOG_INFO, "Authentication sent, waiting for response");
+        ESP_LOGI(TAG, "Authentication sent, waiting for response");
         readCustomData();
     }
 }
 
 void BLEClient::handleNotification(esp_ble_gattc_cb_param_t *param) {
-    ble_log(ESP_LOG_DEBUG, "Notification received from handle: %d", param->notify.handle);
+    ESP_LOGD(TAG, "Notification received from handle: %d", param->notify.handle);
     
     stats_.dataReceived++;
-    lastDataTime_ = ble_get_timestamp();
+    lastDataTime_ = bleGetTimestamp();
 
     if (param->notify.handle == batteryCharHandle_) {
         lastData_.batteryLevel = param->notify.value[0];
-        ble_log(ESP_LOG_INFO, "Battery notification: %d%%", lastData_.batteryLevel);
+        ESP_LOGI(TAG, "Battery notification: %d%%", lastData_.batteryLevel);
     } else if (param->notify.handle == customCharHandle_) {
         memcpy(lastData_.customData, param->notify.value,
                param->notify.value_len < BLE_MAX_CUSTOM_DATA_LEN ? param->notify.value_len : BLE_MAX_CUSTOM_DATA_LEN - 1);
         lastData_.customData[param->notify.value_len] = '\0';
-        ble_log(ESP_LOG_INFO, "Custom notification: %s", lastData_.customData);
+        ESP_LOGI(TAG, "Custom notification: %s", lastData_.customData);
 
         if (state_ == BLE_CLIENT_AUTHENTICATING && strcmp(lastData_.customData, "AUTH_OK") == 0) {
-            ble_log(ESP_LOG_INFO, "Authentication successful");
+            ESP_LOGI(TAG, "Authentication successful");
             state_ = BLE_CLIENT_READY;
 
             if (authCB_ != nullptr) {
@@ -1004,7 +1142,7 @@ void BLEClient::handleNotification(esp_ble_gattc_cb_param_t *param) {
         }
     }
 
-    lastData_.timeStamp = ble_get_timestamp();
+    lastData_.timeStamp = bleGetTimestamp();
     lastData_.valid = true;
 
     if (dataReceivedCB_ != nullptr) {
@@ -1012,14 +1150,10 @@ void BLEClient::handleNotification(esp_ble_gattc_cb_param_t *param) {
     }
 }
 
-/******************************************************************************/
-/*                              Static Tasks                                  */
-/******************************************************************************/
-
 void BLEClient::dataReadTask(void *pvParameters) {
     BLEClient* client = static_cast<BLEClient*>(pvParameters);
     
-    ble_log(ESP_LOG_INFO, "Data read task started");
+    ESP_LOGI(TAG, "Data read task started");
     
     while (client->isConnected()) {
         // Read battery level
@@ -1036,7 +1170,7 @@ void BLEClient::dataReadTask(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(client->config_.readInterval));
     }
     
-    ble_log(ESP_LOG_INFO, "Data read task ended");
+    ESP_LOGI(TAG, "Data read task ended");
     client->dataReadTaskHandle_ = nullptr;
     vTaskDelete(nullptr);
 }
@@ -1044,155 +1178,18 @@ void BLEClient::dataReadTask(void *pvParameters) {
 void BLEClient::reconnectTask(void *pvParameters) {
     BLEClient* client = static_cast<BLEClient*>(pvParameters);
     
-    ble_log(ESP_LOG_INFO, "Reconnect task started");
+    ESP_LOGI(TAG, "Reconnect task started");
     
     while (client->config_.autoReconnect && !client->isConnected()) {
         vTaskDelay(pdMS_TO_TICKS(client->config_.reconnectInterval));
 
         if (!client->isConnected() && client->state_ == BLE_CLIENT_IDLE) {
-            ble_log(ESP_LOG_INFO, "Attempting reconnection");
+            ESP_LOGI(TAG, "Attempting reconnection");
             client->startTargetedScan();
         }
     }
     
-    ble_log(ESP_LOG_INFO, "Reconnect task ended");
+    ESP_LOGI(TAG, "Reconnect task ended");
     client->reconnectTaskHandle_ = nullptr;
     vTaskDelete(nullptr);
-}
-
-/******************************************************************************/
-/*                          Extended Scan Methods                            */
-/******************************************************************************/
-
-esp_err_t BLEClient::startDiscoveryScan(uint32_t duration) {
-    ble_log(ESP_LOG_INFO, "Starting discovery scan for %lu ms (all devices)", 
-            duration);
-
-    if (state_ == BLE_CLIENT_SCANNING) {
-        ble_log(ESP_LOG_WARN, "Already scanning");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-
-    discoveryMode_ = true;
-    currentScanDuration_ = duration;
-    scanStartTime_ = ble_get_timestamp();
-    targetDeviceFoundInScan_ = false;
-
-    state_ = BLE_CLIENT_SCANNING;
-    stats_.scanCount++;
-
-    xSemaphoreGive(stateMutex_);
-
-    if (scanStartedCB_ != nullptr) {
-        scanStartedCB_(duration);
-    }
-
-    esp_err_t ret = esp_ble_gap_set_scan_params(&s_defaultScanParams);
-    if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to set scan params: %s", esp_err_to_name(ret));
-        state_ = BLE_CLIENT_IDLE;
-        discoveryMode_ = false;
-        return ret;
-    }
-
-    return ESP_OK;
-}
-
-esp_err_t BLEClient::startTargetedScan() {
-    char macStr[18];
-    ble_addr_to_string((uint8_t*)config_.targetServerMACadd, macStr);
-    ble_log(ESP_LOG_INFO, "Starting targeted scan for MAC: %s", macStr);
-
-    if (state_ == BLE_CLIENT_SCANNING) {
-        ble_log(ESP_LOG_WARN, "Already scanning");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-
-    // Configure targeted mode (normal)
-    discoveryMode_ = false;
-    currentScanDuration_ = config_.scanTimeout;
-    scanStartTime_ = ble_get_timestamp();
-    targetDeviceFoundInScan_ = false;
-
-    state_ = BLE_CLIENT_SCANNING;
-    stats_.scanCount++;
-
-    xSemaphoreGive(stateMutex_);
-
-    ble_log(ESP_LOG_INFO, "Scan configured:");
-    ble_log(ESP_LOG_INFO, "  Target MAC: %s", macStr);
-    ble_log(ESP_LOG_INFO, "  Duration: %lu ms", config_.scanTimeout);
-
-    if (scanStartedCB_ != nullptr) {
-        scanStartedCB_(config_.scanTimeout);
-    }
-
-    esp_err_t ret = esp_ble_gap_set_scan_params(&s_defaultScanParams);
-    if (ret != ESP_OK) {
-        ble_log(ESP_LOG_ERROR, "Failed to set scan params: %s", esp_err_to_name(ret));
-        state_ = BLE_CLIENT_IDLE;
-        discoveryMode_ = false;
-        return ret;
-    }
-
-    ble_log(ESP_LOG_INFO, "Targeted MAC scan started successfully");
-    return ESP_OK;
-}
-
-void BLEClient::setScanMode(bool discoveryMode) {
-    discoveryMode_ = discoveryMode;
-    ble_log(ESP_LOG_INFO, "Scan mode set to: %s", 
-            discoveryMode ? "DISCOVERY" : "TARGETED");
-}
-
-uint32_t BLEClient::getUniqueDevicesFound() const {
-    return foundDevicesCount_;
-}
-
-void BLEClient::clearDeviceList() {
-    foundDevicesCount_ = 0;
-    memset(foundDevices_, 0, sizeof(foundDevices_));
-    ble_log(ESP_LOG_INFO, "Device list cleared");
-}
-
-const ble_device_info_t* BLEClient::getFoundDevice(uint32_t index) const {
-    if (index >= foundDevicesCount_) {
-        return nullptr;
-    }
-    return &foundDevices_[index];
-}
-
-bool BLEClient::addToFoundDevices(const ble_device_info_t* deviceInfo) {
-    if (deviceInfo == nullptr || foundDevicesCount_ >= kMaxFoundDevices) {
-        return false;
-    }
-
-    if (isDeviceAlreadyFound(deviceInfo->address)) {
-        return false; // Already exists
-    }
-
-    // Add new device
-    memcpy(&foundDevices_[foundDevicesCount_], deviceInfo, sizeof(ble_device_info_t));
-    foundDevicesCount_++;
-
-    ble_log(ESP_LOG_DEBUG, "Added device to list: %s (total: %lu)", 
-            deviceInfo->name, foundDevicesCount_);
-    return true;
-}
-
-bool BLEClient::isDeviceAlreadyFound(const esp_bd_addr_t address) const {
-    for (uint32_t i = 0; i < foundDevicesCount_; i++) {
-        if (memcmp(foundDevices_[i].address, address, ESP_BD_ADDR_LEN) == 0) {
-            return true;
-        }
-    }
-    return false;
 }
