@@ -68,7 +68,7 @@ esp_err_t wifiApiHandler::getGeolocation(std::string& weatherMain, std::string& 
     std::string weatherUrl = "http://api.openweathermap.org/data/2.5/weather"
     "?lat=" + std::to_string(latitude) +
     "&lon=" + std::to_string(longitude) +
-    "&appid=" + std::string("&APPID=de226e12382406a1d5ceced47bdcd1d4");
+    "&appid=" + std::string("64131ba9ad3caf0292bc873e06ed5413");
 
 
     esp_err_t err = wifi_.httpGet(weatherUrl.c_str(), response);
