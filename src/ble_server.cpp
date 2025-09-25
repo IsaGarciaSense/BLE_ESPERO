@@ -3,8 +3,8 @@
  * @brief Implementation of BLE server functionality including advertising,
  * client management, service provisioning, and JSON command processing.
  *
- * @version 0.0.2
- * @date 2025-06-19
+ * @version 0.0.3
+ * @date 2025-09-24
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
@@ -1209,26 +1209,28 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                     ESP_LOGI(TAG, "Battery characteristic added: handle=%d", 
                             instance_->batteryCharHandle_);
                     
-                    // Add custom characteristic
-                    esp_bt_uuid_t custom_char_uuid;
-                    if (instance_->securityConfig_.useCustomUUIDS) {
-                        custom_char_uuid.len = ESP_UUID_LEN_128;
-                        memcpy(custom_char_uuid.uuid.uuid128, 
-                               instance_->securityConfig_.customCharUUID, 16);
-                    } else {
-                        custom_char_uuid.len = ESP_UUID_LEN_16;
-                        custom_char_uuid.uuid.uuid16 = BLE_DEFAULT_CUSTOM_CHAR_UUID;
-                    }
+                    // Add CCCD descriptor for battery characteristic (needed for notifications)
+                    esp_bt_uuid_t descr_uuid;
+                    descr_uuid.len = ESP_UUID_LEN_16;
+                    descr_uuid.uuid.uuid16 = ESP_GATT_UUID_CHAR_CLIENT_CONFIG;
                     
-                    esp_ble_gatts_add_char(instance_->serviceHandle_, &custom_char_uuid,
-                                          ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-                                          ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE | 
-                                          ESP_GATT_CHAR_PROP_BIT_NOTIFY,
-                                          NULL, NULL);
+                    esp_ble_gatts_add_char_descr(instance_->serviceHandle_, &descr_uuid,
+                                                ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+                                                NULL, NULL);
+                                                
                 } else if (instance_->customCharHandle_ == BLE_INVALID_HANDLE) {
                     instance_->customCharHandle_ = param->add_char.attr_handle;
                     ESP_LOGI(TAG, "Custom characteristic added: handle=%d", 
                             instance_->customCharHandle_);
+                    
+                    // Add CCCD descriptor for custom characteristic (needed for notifications)
+                    esp_bt_uuid_t descr_uuid;
+                    descr_uuid.len = ESP_UUID_LEN_16;
+                    descr_uuid.uuid.uuid16 = ESP_GATT_UUID_CHAR_CLIENT_CONFIG;
+                    
+                    esp_ble_gatts_add_char_descr(instance_->serviceHandle_, &descr_uuid,
+                                                ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+                                                NULL, NULL);
                 }
             }
             break;
@@ -1378,6 +1380,42 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             if (param->write.need_rsp) {
                 esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id,
                                            ESP_GATT_OK, NULL);
+            }
+            break;
+            
+        case ESP_GATTS_ADD_CHAR_DESCR_EVT:
+            if (param->add_char_descr.status == ESP_GATT_OK) {
+                ESP_LOGI(TAG, "CCCD descriptor added: handle=%d, service_handle=%d", 
+                        param->add_char_descr.attr_handle, param->add_char_descr.service_handle);
+                        
+                // Check if this is the first descriptor (battery CCCD)
+                if (instance_->batteryDescrHandle_ == BLE_INVALID_HANDLE) {
+                    instance_->batteryDescrHandle_ = param->add_char_descr.attr_handle;
+                    ESP_LOGI(TAG, "Battery CCCD descriptor handle stored: %d", instance_->batteryDescrHandle_);
+                    
+                    // Now add the custom characteristic
+                    esp_bt_uuid_t custom_char_uuid;
+                    if (instance_->securityConfig_.useCustomUUIDS) {
+                        custom_char_uuid.len = ESP_UUID_LEN_128;
+                        memcpy(custom_char_uuid.uuid.uuid128, 
+                               instance_->securityConfig_.customCharUUID, 16);
+                    } else {
+                        custom_char_uuid.len = ESP_UUID_LEN_16;
+                        custom_char_uuid.uuid.uuid16 = BLE_DEFAULT_CUSTOM_CHAR_UUID;
+                    }
+                    
+                    esp_ble_gatts_add_char(instance_->serviceHandle_, &custom_char_uuid,
+                                          ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+                                          ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE | 
+                                          ESP_GATT_CHAR_PROP_BIT_NOTIFY,
+                                          NULL, NULL);
+                } else if (instance_->customDescrHandle_ == BLE_INVALID_HANDLE) {
+                    instance_->customDescrHandle_ = param->add_char_descr.attr_handle;
+                    ESP_LOGI(TAG, "Custom CCCD descriptor handle stored: %d", instance_->customDescrHandle_);
+                    ESP_LOGI(TAG, "All characteristics and descriptors added successfully!");
+                }
+            } else {
+                ESP_LOGE(TAG, "Failed to add CCCD descriptor: status=%d", param->add_char_descr.status);
             }
             break;
             
