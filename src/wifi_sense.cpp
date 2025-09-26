@@ -300,6 +300,28 @@ esp_err_t WifiHandler::reconnect() {
   }
 }
 
+esp_err_t WifiHandler::disconnect() {
+    ESP_LOGI(TAG, "Disconnecting from Wi-Fi...");
+
+    // Disconnect from the current AP
+    esp_err_t err = esp_wifi_disconnect();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_disconnect() failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    // Stop the Wi-Fi driver to free resources
+    err = esp_wifi_stop();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_stop() failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    wifiConnected_ = false;
+    ESP_LOGI(TAG, "Wi-Fi disconnected successfully");
+    return ESP_OK;
+}
+
 bool WifiHandler::isWifiConnected() { 
     return wifiConnected_; 
 };
