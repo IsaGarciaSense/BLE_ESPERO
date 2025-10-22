@@ -88,6 +88,14 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, " Client disconnected - ID: %d, Reason: %d", connID, reason);
         });
 
+        server->setAdvertisingCallback([](bool isStarted, esp_err_t result) {
+            if (isStarted && result == ESP_OK) {
+                ESP_LOGI(TAG, " Advertising STARTED successfully");
+            } else if (!isStarted || result != ESP_OK) {
+                ESP_LOGE(TAG, " Advertising STOPPED or FAILED: %s", esp_err_to_name(result));
+            }
+        });
+
         server->setDataWrittenCallback([](uint16_t connID, const uint8_t* data, uint16_t length) {
             ESP_LOGI(TAG, " Client %d data received: %.*s", connID, length, data);
             // Echo de vuelta los datos recibidos para testing
@@ -120,31 +128,39 @@ extern "C" void app_main() {
                 ESP_LOGI(TAG, " Connection count changed: %d -> %d", 
                         lastConnectedClients, (int)status.connectedClients);
                 lastConnectedClients = (int)status.connectedClients;
-                
-                // Si no hay clientes conectados, asegurar que advertising esté activo
-                if (status.connectedClients == 0 && !status.advertisingActive) {
-                    ESP_LOGI(TAG, " No clients connected, restarting advertising...");
-                    server->startAdvertising();
+            }
+            
+            // Verificar y forzar advertising si no está activo y no hay clientes máximos
+            if (!status.advertisingActive && status.connectedClients < 4) {
+                ESP_LOGW(TAG, "  Advertising not active with %d clients - forcing restart...", 
+                        (int)status.connectedClients);
+                esp_err_t ret = server->startAdvertising();
+                if (ret == ESP_OK) {
+                    ESP_LOGI(TAG, " Advertising restarted successfully");
+                } else {
+                    ESP_LOGE(TAG, " Failed to restart advertising: %s", esp_err_to_name(ret));
                 }
             }
 
             if (loopCount % 30 == 0) {
                 bleServerStats_t stats = server->getStats();
                 
-                ESP_LOGI(TAG, "=== Server State ===");
+                ESP_LOGI(TAG, "===============================================");
+                ESP_LOGI(TAG, " SERVER STATUS REPORT - Loop %d", loopCount);
+                ESP_LOGI(TAG, "===============================================");
                 ESP_LOGI(TAG, "   State: %s", server->kgetStateString());
-                ESP_LOGI(TAG, "   Clients connected: %d", (int)status.connectedClients);
-                ESP_LOGI(TAG, "   Advertising active: %s", status.advertisingActive ? "SÍ" : "NO");
+                ESP_LOGI(TAG, "   Clients connected: %d/%d", (int)status.connectedClients, 4);
+                ESP_LOGI(TAG, "    Advertising: %s", status.advertisingActive ? " ACTIVE" : " INACTIVE");
                 ESP_LOGI(TAG, "   Total connections: %lu", stats.totalConnections);
-                ESP_LOGI(TAG, "   Data sent: %lu", stats.dataSent);
-                ESP_LOGI(TAG, "   Data received: %lu", stats.dataReceived);
-                ESP_LOGI(TAG, "   Active time: %llu ms", ble->getUptime());
+                ESP_LOGI(TAG, "   Data sent: %lu | Data received: %lu", stats.dataSent, stats.dataReceived);
+                ESP_LOGI(TAG, "   Uptime: %llu seconds", ble->getUptime()/1000000);
                 ESP_LOGI(TAG, "   Free memory: %lu bytes", esp_get_free_heap_size());
-                ESP_LOGI(TAG, "===========================");
+                ESP_LOGI(TAG, "===============================================");
                 
                 char status_data[64];
-                snprintf(status_data, sizeof(status_data), "Uptime:%llu Loop:%d Clients:%d", 
-                        ble->getUptime()/1000, loopCount, (int)status.connectedClients);
+                snprintf(status_data, sizeof(status_data), "Uptime:%llu Loop:%d Clients:%d ADV:%s", 
+                        ble->getUptime()/1000000, loopCount, (int)status.connectedClients,
+                        status.advertisingActive ? "ON" : "OFF");
                 server->setCustomData(status_data);
             }
             

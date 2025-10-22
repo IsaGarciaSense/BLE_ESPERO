@@ -1121,11 +1121,16 @@ void BLEServer::gapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t
         case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
             if (param->adv_start_cmpl.status != ESP_BT_STATUS_SUCCESS) {
                 ESP_LOGE(TAG, "Advertising start failed: %d", param->adv_start_cmpl.status);
+                instance_->status_.advertisingActive = false;
                 if (instance_->advertisingCB_) {
                     instance_->advertisingCB_(false, ESP_FAIL);
                 }
             } else {
                 ESP_LOGI(TAG, "Advertising started successfully");
+                instance_->status_.advertisingActive = true;
+                if (instance_->advertisingCB_) {
+                    instance_->advertisingCB_(true, ESP_OK);
+                }
             }
             break;
             
@@ -1134,6 +1139,15 @@ void BLEServer::gapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t
                 ESP_LOGE(TAG, "Advertising stop failed: %d", param->adv_stop_cmpl.status);
             } else {
                 ESP_LOGI(TAG, "Advertising stopped successfully");
+                instance_->status_.advertisingActive = false;
+                
+                // Si auto-advertising está habilitado y no hay clientes máximos conectados, reiniciar advertising
+                if (instance_->config_.autoStartAdvertising && 
+                    instance_->status_.connectedClients < instance_->maxClients_) {
+                    ESP_LOGI(TAG, "Auto-restarting advertising (auto-advertising enabled)");
+                    vTaskDelay(pdMS_TO_TICKS(100)); // Pequeño delay antes de reiniciar
+                    instance_->startAdvertising();
+                }
             }
             break;
             
@@ -1249,16 +1263,9 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             instance_->state_ = BLE_SERVER_CONNECTED;
             instance_->status_.state = instance_->state_;
             
-            // Stop advertising if we reached max clients
-            // if (instance_->status_.connected_clients >= instance_->max_clients_) {
-            //     instance_->stopAdvertising();
-            // }
-
-            // Mantener advertising activo para permitir más conexiones
-            // if (!instance_->isAdvertising()) {
-            //     ESP_LOGI(TAG, "Reactivating advertising to allow more connections");
-            //     instance_->startAdvertising();
-            // }
+            // El ESP32 detiene automáticamente el advertising al conectarse un cliente
+            // Actualizamos nuestro estado interno para reflejar esto
+            instance_->status_.advertisingActive = false;
             
             // Call user callback
             if (instance_->clientConnectedCB_) {
@@ -1272,17 +1279,17 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                 instance_->clientConnectedCB_(param->connect.conn_id, &client_info);
             }
 
+            // Reiniciar advertising inmediatamente si no hemos alcanzado el máximo de clientes
             if (instance_->status_.connectedClients < instance_->maxClients_) {
-                // Restart advertising si auto-advertising está habilitado
                 if (instance_->config_.autoStartAdvertising) {
-                    if (!instance_->isAdvertising()) {
-                        ESP_LOGI(TAG, "Restarting advertising to allow more connections");
-                        instance_->startAdvertising();
-                    }
+                    ESP_LOGI(TAG, "Restarting advertising to allow more connections (%d/%d clients)", 
+                            instance_->status_.connectedClients, instance_->maxClients_);
+                    vTaskDelay(pdMS_TO_TICKS(50)); // Pequeño delay para estabilidad
+                    instance_->startAdvertising();
                 }
-            }else {
-                ESP_LOGI(TAG, "Maximum clients connected, stopping advertising");
-                instance_->stopAdvertising();
+            } else {
+                ESP_LOGI(TAG, "Maximum clients connected (%d/%d), keeping advertising stopped", 
+                        instance_->status_.connectedClients, instance_->maxClients_);
             }
             break;
             
@@ -1293,22 +1300,33 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             // Remove client session
             instance_->removeClientSession(param->disconnect.conn_id);
             
+            // Update server state if no more clients
+            if (instance_->status_.connectedClients == 0) {
+                instance_->state_ = BLE_SERVER_READY;
+                instance_->status_.state = instance_->state_;
+            }
+            
             // Call user callback
             if (instance_->clientDisconnectedCB_) {
                 instance_->clientDisconnectedCB_(param->disconnect.conn_id, param->disconnect.reason);
             }
             
-            // Siempre asegurar que advertising está activo después de desconexión
-            if (!instance_->isAdvertising()) {
-                ESP_LOGI(TAG, "Restarting advertising after client disconnection");
-                instance_->startAdvertising();
-            }
-
-            // Restart advertising si auto-advertising está habilitado (sin importar clientes)
+            // SIEMPRE reiniciar advertising después de desconexión (si auto-advertising está habilitado)
             if (instance_->config_.autoStartAdvertising) {
-                if (!instance_->isAdvertising()) {
-                    instance_->startAdvertising();
+                ESP_LOGI(TAG, "Client disconnected - restarting advertising (%d/%d clients remaining)", 
+                        instance_->status_.connectedClients, instance_->maxClients_);
+                
+                // Pequeño delay para asegurar que la desconexión se complete
+                vTaskDelay(pdMS_TO_TICKS(100));
+                
+                esp_err_t ret = instance_->startAdvertising();
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to restart advertising after disconnection: %s", esp_err_to_name(ret));
+                } else {
+                    ESP_LOGI(TAG, "Advertising restarted successfully after client disconnection");
                 }
+            } else {
+                ESP_LOGW(TAG, "Auto-advertising disabled - advertising not restarted");
             }
             break;
             
