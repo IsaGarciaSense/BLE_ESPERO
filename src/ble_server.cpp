@@ -1255,10 +1255,10 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             // }
 
             // Mantener advertising activo para permitir más conexiones
-            if (!instance_->isAdvertising()) {
-                ESP_LOGI(TAG, "Reactivating advertising to allow more connections");
-                instance_->startAdvertising();
-            }
+            // if (!instance_->isAdvertising()) {
+            //     ESP_LOGI(TAG, "Reactivating advertising to allow more connections");
+            //     instance_->startAdvertising();
+            // }
             
             // Call user callback
             if (instance_->clientConnectedCB_) {
@@ -1270,6 +1270,19 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                 strcpy(client_info.name, "Unknown");
                 
                 instance_->clientConnectedCB_(param->connect.conn_id, &client_info);
+            }
+
+            if (instance_->status_.connectedClients < instance_->maxClients_) {
+                // Restart advertising si auto-advertising está habilitado
+                if (instance_->config_.autoStartAdvertising) {
+                    if (!instance_->isAdvertising()) {
+                        ESP_LOGI(TAG, "Restarting advertising to allow more connections");
+                        instance_->startAdvertising();
+                    }
+                }
+            }else {
+                ESP_LOGI(TAG, "Maximum clients connected, stopping advertising");
+                instance_->stopAdvertising();
             }
             break;
             
