@@ -8,16 +8,37 @@
  *******************************************************************************/
 
 #include "ble_sense.hpp"
+#include "wifi_sense.hpp"
+#include "ble_server.hpp"
+// #include "device_configurator.hpp"
+#include "HiveConfig.hpp"
+#include "aws_sense.hpp"
 
 #include "esp_log.h"
 #include <inttypes.h>
 
 #include "nvs_flash.h"
 
-static const char* TAG = "BLE_SERVER_EXAMPLE";
+WifiHandler* wifiHandler = nullptr;
+awsHandler* awsHelper = nullptr;
 
 extern "C" void app_main() {
-    ESP_LOGI(TAG, "=== BLE SERVER ===");
+    ESP_LOGI(TAG, "=== HIVE FIRST STEPS ===");
+
+    wifiHandler = new WifiHandler(userSSID, userPassword);
+
+    if (wifiHandler->connectWifi() != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to connect to WiFi.");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Connected to WiFi!");
+    awsHelper = new awsHandler(*wifiHandler);
+
+    if (awsHelper->init(AWS_IOT_ENDPOINT, THINGNAME, AWS_ServerCA, AWS_ClientCertificate, AWS_ClientKey) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize AWS helper");
+        return;
+    }
     
     // Inicializar NVS
     esp_err_t ret = nvs_flash_init();
@@ -102,7 +123,21 @@ extern "C" void app_main() {
             if (length > 0) {
                 char response[128];
                 snprintf(response, sizeof(response), "Server received: %.*s", length, data);
-                // Aquí podrías enviar una respuesta si la librería lo soporta
+                // Connect to AWS IoT Core via MQTT over TLS.
+                if (awsHelper->connect() != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to connect to AWS IoT Core");
+                    return;
+                }
+
+                // Publish the current time to an AWS IoT Core topic (change the topic as needed).
+                if (awsHelper->publish(mqttDataTopic, response) != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to publish data to AWS");
+                } else {
+                    ESP_LOGI(TAG, "Data published to AWS successfully");
+                }
+
+                // Disconnect from AWS IoT Core.
+                awsHelper->disconnect();
             }
         });
 

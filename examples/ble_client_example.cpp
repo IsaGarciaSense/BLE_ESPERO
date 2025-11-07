@@ -1,15 +1,15 @@
 /*******************************************************************************
  * @file ble_client_example.cpp
- * @brief BLE client example targeting specific device by MAC address
- * @details Demonstrates proper configuration order for MAC-based targeting
- * 
- * @version 0.0.6
- * @date 2025-09-01
+ * @brief BLE client example targeting device by name (SenseAI_BLE)
+ * @details Demonstrates connection to device by name instead of MAC address
+ *
+ * @version 0.0.7
+ * @date 2025-10-22
  * @author isa@sense-ai.co
  *******************************************************************************
  *******************************************************************************/
 
-#include "ble.hpp"
+#include "ble_sense.hpp"
 #include "esp_log.h"
 #include "nvs_flash.h"
 
@@ -17,244 +17,276 @@
 /*                              Constants                                     */
 /******************************************************************************/
 
-static const char* TAG = "BLE_MAC_TARGET";
+static const char* TAG = "BLE_NAME_TARGET";
 
-// MAC address del dispositivo target (cambiar por el tuyo)
-const esp_bd_addr_t TARGET_MAC = {0x48, 0xCA, 0x43, 0x18, 0x5D, 0x1E};
-
-// Nombre del dispositivo target (opcional, se puede usar solo MAC)
+// Nombre del dispositivo target - ESTE ES EL PRINCIPAL
 const char* TARGET_DEVICE_NAME = "SenseAI_BLE";
+
+/******************************************************************************/
+/*                         Global Variables                                   */
+/******************************************************************************/
+
+uint32_t counter = 0;
+static BLEClient* g_client = nullptr; // Variable global para acceder desde callbacks
+
+/******************************************************************************/
+/*                         Callback Functions                                */
+/******************************************************************************/
+
+// Callback cuando se encuentra cualquier dispositivo
+void onAnyDeviceFound(const bleDeviceInfo_t* deviceInfo, bool isTarget) {
+    // Solo mostrar dispositivos con nombre conocido
+    if (strlen(deviceInfo->name) > 0) {
+        char macStr[18];
+        sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+                deviceInfo->address[0], deviceInfo->address[1],
+                deviceInfo->address[2], deviceInfo->address[3],
+                deviceInfo->address[4], deviceInfo->address[5]);
+
+        ESP_LOGI(TAG, " Device Found: '%s' | MAC: %s | RSSI: %d dBm %s", 
+                 deviceInfo->name, macStr, deviceInfo->rssi,
+                 isTarget ? "[TARGET]" : "");
+
+        // Usar el parámetro isTarget en lugar de verificar nombre nuevamente
+        if (isTarget && g_client != nullptr && !g_client->isConnected()) {
+            ESP_LOGI(TAG, " TARGET VERIFIED! Stopping scan and connecting...");
+            
+            // Solo detener scan - la conexión se manejará en el callback de scan completed
+            g_client->stopScan();
+        }
+    }
+}
+
+// Callback cuando se conecta exitosamente
+void onConnected(const bleDeviceInfo_t* deviceInfo) {
+    char macStr[18];
+    sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
+            deviceInfo->address[0], deviceInfo->address[1], deviceInfo->address[2],
+            deviceInfo->address[3], deviceInfo->address[4], deviceInfo->address[5]);
+
+    ESP_LOGI(TAG, "\n🎉 CONNECTION SUCCESSFUL! 🎉");
+    ESP_LOGI(TAG, "   Device: %s", deviceInfo->name);
+    ESP_LOGI(TAG, "   MAC: %s", macStr);
+    ESP_LOGI(TAG, "   RSSI: %d dBm\n", deviceInfo->rssi);
+}
+
+// Callback cuando se desconecta
+void onDisconnected(int reason, bool wasPlanned) {
+    ESP_LOGW(TAG, " DISCONNECTED - Reason: %d, Planned: %s", reason,
+             wasPlanned ? "YES" : "NO");
+    
+    if (!wasPlanned && g_client != nullptr) {
+        ESP_LOGI(TAG, " Unexpected disconnection, restarting search...");
+        // Reiniciar búsqueda después de desconexión inesperada
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (!g_client->isScanning()) {
+            g_client->startDiscoveryScan(10000);
+        }
+    }
+}
+
+// Callback cuando inicia el scan
+void onScanStarted(uint32_t duration) {
+    ESP_LOGI(TAG, " 🔍 Scanning for %lu ms...", duration);
+}
+
+// Callback cuando termina el scan
+void onScanCompleted(uint32_t found, bool targetFound) {
+    ESP_LOGI(TAG, " Scan completed: %lu devices found", found);
+    if (!targetFound && g_client != nullptr && !g_client->isConnected()) {
+        ESP_LOGI(TAG, " Target not found, restarting scan...");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        g_client->startDiscoveryScan(10000);
+    }
+}
 
 /******************************************************************************/
 /*                              Main Function                                 */
 /******************************************************************************/
 
 extern "C" void app_main() {
-    ESP_LOGI(TAG, "\n=== BLE CLIENT MAC TARGETING EXAMPLE ===");
-    ESP_LOGI(TAG, "Target MAC: 48:CA:43:18:5D:1E");
-    ESP_LOGI(TAG, "Target Name: %s", TARGET_DEVICE_NAME);
-    ESP_LOGI(TAG, "==========================================\n");
-    
-    // Step 1: Initialize NVS (requerido para BLE)
+    ESP_LOGI(TAG, "\n=== BLE CLIENT NAME TARGETING EXAMPLE ===");
+    ESP_LOGI(TAG, "Target Device Name: %s", TARGET_DEVICE_NAME);
+    ESP_LOGI(TAG, "========================================\n");
+
+    // Step 1: Initialize NVS
     esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
+        ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGI(TAG, "Erasing NVS flash...");
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-    ESP_LOGI(TAG, "✓ NVS initialized");
+    ESP_LOGI(TAG, " NVS initialized");
 
-    // Step 2: Crear la configuración de BLE Library con autoStart DESHABILITADO
+    // Step 2: Create BLE Library configuration with autoStart DISABLED
     bleLibraryConfig_t bleConfig;
     BLELibrary::createDefaultConfig(&bleConfig, BLE_MODE_CLIENT_ONLY);
-    strncpy(bleConfig.deviceName, "MacTargetClient", BLE_MAX_DEVICE_NAME_LEN - 1);
-    
-    // CRÍTICO: Deshabilitar auto-start para poder configurar antes
+    strncpy(bleConfig.deviceName, "NameTargetClient",
+            BLE_MAX_DEVICE_NAME_LEN - 1);
+
+    // CRITICAL: Disable auto-start for manual configuration
     bleConfig.autoStart = false;
-    
+
     ESP_LOGI(TAG, "Creating BLE Library...");
     ESP_LOGI(TAG, "Auto-start disabled for manual configuration");
     BLELibrary* ble = new BLELibrary(bleConfig);
     if (ble == nullptr) {
-        ESP_LOGE(TAG, "✗ Failed to create BLE Library");
+        ESP_LOGE(TAG, " Failed to create BLE Library");
         return;
     }
-    ESP_LOGI(TAG, "✓ BLE Library created");
+    ESP_LOGI(TAG, " BLE Library created");
 
-    // Step 3: Inicializar la librería para crear el cliente interno
+    // Step 3: Initialize the library
     ESP_LOGI(TAG, "\n--- Initializing BLE Library ---");
     ret = ble->init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "✗ Failed to initialize BLE: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, " Failed to initialize BLE: %s", esp_err_to_name(ret));
         delete ble;
         return;
     }
-    ESP_LOGI(TAG, "✓ BLE Library initialized");
+    ESP_LOGI(TAG, " BLE Library initialized");
 
-    // Step 4: Obtener el cliente (ya inicializado internamente)
+    // Step 4: Get the client
     BLEClient* client = ble->getClient();
     if (client == nullptr) {
-        ESP_LOGE(TAG, "✗ Failed to get BLE Client");
+        ESP_LOGE(TAG, " Failed to get BLE Client");
         delete ble;
         return;
     }
-    ESP_LOGI(TAG, "✓ BLE Client obtained");
+    ESP_LOGI(TAG, " BLE Client obtained");
 
-    // Step 5: Configurar TODO usando setClientConfig COMPLETO
-    ESP_LOGI(TAG, "\n--- Configuring Client with Complete Config ---");
-    
-    // Crear configuración completa del cliente
+    // Set global client pointer for callbacks
+    g_client = client;
+
+    // Step 5: Configure client for NAME-based search
+    ESP_LOGI(TAG, "\n--- Configuring Client for Name-Based Search ---");
+
     bleClientConfig_t clientConfig;
     memset(&clientConfig, 0, sizeof(clientConfig));
-    
-    // Configurar MAC target
-    memcpy(clientConfig.targetServerMACadd, TARGET_MAC, ESP_BD_ADDR_LEN);
-    
-    // Configurar nombre target
-    strncpy(clientConfig.targetDeviceName, TARGET_DEVICE_NAME, BLE_MAX_DEVICE_NAME_LEN - 1);
-    
-    // Configurar timeouts
+
+    // Configure target device NAME (not MAC)
+    strncpy(clientConfig.targetDeviceName, TARGET_DEVICE_NAME,
+            BLE_MAX_DEVICE_NAME_LEN - 1);
+
+    // Set MAC to all zeros (no específico MAC targeting)
+    memset(clientConfig.targetServerMACadd, 0x00, ESP_BD_ADDR_LEN);
+
+    // Configure timeouts
     clientConfig.scanTimeout = 10000;
     clientConfig.connectionTimeout = 10000;
     clientConfig.autoReconnect = true;
     clientConfig.reconnectInterval = 5000;
     clientConfig.enableNotifications = true;
     clientConfig.readInterval = 5000;
-    
-    // Aplicar configuración completa
+
     ret = client->setConfig(clientConfig);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "✗ Failed to set client config: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, " Failed to set client config: %s", esp_err_to_name(ret));
         delete ble;
         return;
     }
-    ESP_LOGI(TAG, "✓ Client configuration applied");
+    ESP_LOGI(TAG, " Client configuration applied");
 
-    // Step 6: Configurar seguridad por separado
+    // Step 6: Configure security
     ESP_LOGI(TAG, "\n--- Configuring Security ---");
     bleSecurityConfig_t secConfig;
     ret = bleCreateDefaultSecurityConfig(&secConfig, BLE_SECURITY_NONE);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "✗ Failed to create security config: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, " Failed to create security config: %s",
+                 esp_err_to_name(ret));
         delete ble;
         return;
     }
-    ESP_LOGI(TAG, "✓ Security config created - Level: %d", secConfig.level);
 
     ret = client->setSecurityConfig(secConfig);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "✗ Failed to apply security config: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, " Failed to apply security config: %s",
+                 esp_err_to_name(ret));
         delete ble;
         return;
     }
-    ESP_LOGI(TAG, "✓ Security config applied successfully");
+    ESP_LOGI(TAG, " Security config applied successfully");
 
-    // Step 7: VERIFICAR configuración ANTES de start()
-    ESP_LOGI(TAG, "\n=== PRE-START CONFIGURATION VERIFICATION ===");
-    bleClientConfig_t currentConfig = client->getConfig();
-    
-    char macStr[18];
-    sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
-            currentConfig.targetServerMACadd[0], currentConfig.targetServerMACadd[1],
-            currentConfig.targetServerMACadd[2], currentConfig.targetServerMACadd[3],
-            currentConfig.targetServerMACadd[4], currentConfig.targetServerMACadd[5]);
-    
-    ESP_LOGI(TAG, "PRE-START Target Device Name: %s", currentConfig.targetDeviceName);
-    ESP_LOGI(TAG, "PRE-START Target MAC Address: %s", macStr);
-    ESP_LOGI(TAG, "PRE-START Scan Timeout: %lu ms", currentConfig.scanTimeout);
-    ESP_LOGI(TAG, "PRE-START Auto Reconnect: %s", currentConfig.autoReconnect ? "YES" : "NO");
-    ESP_LOGI(TAG, "===================================================\n");
+    // Step 7: Setup callbacks BEFORE starting
+    ESP_LOGI(TAG, "\n--- Setting up Callbacks ---");
 
-    // Step 8: Configurar callbacks para monitoreo ANTES de start()
-    ESP_LOGI(TAG, "Setting up callbacks...");
-    
-    client->setDeviceFoundCallback([](const bleDeviceInfo_t* deviceInfo, bool* shouldConnect) {
-        char macStr[18];
-        sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
-                deviceInfo->address[0], deviceInfo->address[1], 
-                deviceInfo->address[2], deviceInfo->address[3], 
-                deviceInfo->address[4], deviceInfo->address[5]);
-                
-        ESP_LOGI(TAG, "🎯 TARGET FOUND! Connecting to:");
-        ESP_LOGI(TAG, "   Name: %s", deviceInfo->name);
-        ESP_LOGI(TAG, "   MAC: %s", macStr);
-        ESP_LOGI(TAG, "   RSSI: %d dBm", deviceInfo->rssi);
-        *shouldConnect = true;
-    });
+    // Set all callbacks using function pointers
+    client->setAnyDeviceFoundCallback(onAnyDeviceFound);
+    client->setConnectedCallback(onConnected);
+    client->setDisconnectedCallback(onDisconnected);
+    client->setScanStartedCallback(onScanStarted);
+    client->setScanCompletedCallback(onScanCompleted);
 
-    client->setConnectedCallback([](const bleDeviceInfo_t* deviceInfo) {
-        char macStr[18];
-        sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
-                deviceInfo->address[0], deviceInfo->address[1], 
-                deviceInfo->address[2], deviceInfo->address[3], 
-                deviceInfo->address[4], deviceInfo->address[5]);
-                
-        ESP_LOGI(TAG, "✅ CONEXIÓN EXITOSA!");
-        ESP_LOGI(TAG, "   Dispositivo: %s", deviceInfo->name);
-        ESP_LOGI(TAG, "   MAC: %s", macStr);
-        ESP_LOGI(TAG, "   RSSI: %d dBm", deviceInfo->rssi);
-    });
+    ESP_LOGI(TAG, " Callbacks configured");
 
-    client->setDisconnectedCallback([](int reason, bool wasPlanned) {
-        ESP_LOGW(TAG, "❌ Desconectado - Razón: %d, Planeado: %s", 
-                reason, wasPlanned ? "SÍ" : "NO");
-    });
-
-    client->setScanStartedCallback([](uint32_t duration) {
-        ESP_LOGI(TAG, "🔍 Iniciando escaneo por %lu ms...", duration);
-    });
-
-    client->setScanCompletedCallback([](uint32_t found, bool targetFound) {
-        ESP_LOGI(TAG, "📋 Escaneo completado: %lu dispositivos, Target: %s", 
-                found, targetFound ? "✅ ENCONTRADO" : "❌ NO ENCONTRADO");
-    });
-
-    ESP_LOGI(TAG, "✓ Callbacks configured");
-
-    // Step 9: AHORA SÍ iniciar servicios BLE (esto iniciará el escaneo con la config correcta)
+    // Step 8: Start BLE services
     ESP_LOGI(TAG, "\n--- Starting BLE Services ---");
     ret = ble->start();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "✗ Failed to start BLE services: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, " Failed to start BLE services: %s",
+                 esp_err_to_name(ret));
         delete ble;
         return;
     }
-    ESP_LOGI(TAG, "✓ BLE Services started");
+    ESP_LOGI(TAG, "BLE Services started");
 
-    // Step 10: VERIFICACIÓN FINAL después de start()
-    ESP_LOGI(TAG, "\n=== FINAL VERIFICATION AFTER START ===");
-    bleClientConfig_t finalConfig = client->getConfig();
-    
-    char finalMacStr[18];
-    sprintf(finalMacStr, "%02X:%02X:%02X:%02X:%02X:%02X",
-            finalConfig.targetServerMACadd[0], finalConfig.targetServerMACadd[1],
-            finalConfig.targetServerMACadd[2], finalConfig.targetServerMACadd[3],
-            finalConfig.targetServerMACadd[4], finalConfig.targetServerMACadd[5]);
-    
-    ESP_LOGI(TAG, "FINAL Target MAC: %s", finalMacStr);
-    ESP_LOGI(TAG, "FINAL Target Name: %s", finalConfig.targetDeviceName);
-    ESP_LOGI(TAG, "=======================================\n");
+    // Step 9: Main monitoring loop (MUY SIMPLIFICADO)
+    ESP_LOGI(TAG, "\n🔎 Starting search for device: %s\n", TARGET_DEVICE_NAME);
 
-    // Step 11: Loop principal de monitoreo
-    ESP_LOGI(TAG, "🚀 Iniciando búsqueda del dispositivo target...\n");
-    
-    uint32_t counter = 0;
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         counter++;
 
-        // Status cada 15 segundos
-        if (counter % 15 == 0) {
-            ESP_LOGI(TAG, "\n📊 === Status (t=%lu s) ===", counter);
-            ESP_LOGI(TAG, "Estado: %s", client->kgetStateString());
-            ESP_LOGI(TAG, "Conectado: %s", client->isConnected() ? "✅ SÍ" : "❌ NO");
-            ESP_LOGI(TAG, "Escaneando: %s", client->isScanning() ? "✅ SÍ" : "❌ NO");
-            
-            bleClientStats_t stats = client->getStats();
-            ESP_LOGI(TAG, "Estadísticas:");
-            ESP_LOGI(TAG, "  Escaneos: %lu", stats.scanCount);
-            ESP_LOGI(TAG, "  Conexiones exitosas: %lu/%lu", 
-                    stats.successfulConnections, stats.connectionAttempts);
-            ESP_LOGI(TAG, "=========================\n");
-            
-            // Si no está escaneando ni conectado, reiniciar escaneo
-            if (!client->isConnected() && !client->isScanning()) {
-                ESP_LOGW(TAG, "⚠️ Reiniciando escaneo...");
-                client->startTargetedScan();
+        // Si está conectado, solo mostrar datos
+        if (client->isConnected()) {
+            // Mostrar datos cada 5 segundos
+            if (counter % 5 == 0) {
+                const bleDataPacket_t* data = client->kgetLastData();
+                if (data != nullptr && data->valid) {
+                    ESP_LOGI(TAG, " 📊 Data: Battery=%d%%, Custom=%s",
+                             data->batteryLevel, data->customData);
+                } else {
+                    ESP_LOGD(TAG, " Requesting fresh data...");
+                    client->readBatteryLevel();
+                    client->readCustomData();
+                }
             }
-        }
+            
+            // Status menos frecuente cuando conectado
+            if (counter % 30 == 0) {
+                ESP_LOGI(TAG, "\n=== ✅ Connected Status (t=%lu s) ===", counter);
+                ESP_LOGI(TAG, "State: %s", client->kgetStateString());
+                
+                bleClientStats_t stats = client->getStats();
+                ESP_LOGI(TAG, "Stats: %lu scans, %lu/%lu connections", 
+                         stats.scanCount, stats.successfulConnections, stats.connectionAttempts);
+                ESP_LOGI(TAG, "=====================================\n");
+            }
+        } 
+        // Si NO está conectado, verificar que esté escaneando
+        else {
+            // Status cada 10 segundos cuando desconectado
+            if (counter % 10 == 0) {
+                ESP_LOGI(TAG, "\n=== 🔍 Searching Status (t=%lu s) ===", counter);
+                ESP_LOGI(TAG, "State: %s", client->kgetStateString());
+                ESP_LOGI(TAG, "Scanning: %s", client->isScanning() ? "YES" : "NO");
+                
+                bleClientStats_t stats = client->getStats();
+                ESP_LOGI(TAG, "Stats: %lu scans, %lu/%lu connections", 
+                         stats.scanCount, stats.successfulConnections, stats.connectionAttempts);
+                ESP_LOGI(TAG, "=====================================\n");
 
-        // Si está conectado, mostrar datos cada 5 segundos
-        if (client->isConnected() && (counter % 5 == 0)) {
-            const bleDataPacket_t* data = client->kgetLastData();
-            if (data != nullptr && data->valid) {
-                ESP_LOGI(TAG, "📊 Datos: Batería=%d%%, Custom=%s", 
-                        data->batteryLevel, data->customData);
+                // Reiniciar scan si no está escaneando y no está conectado
+                if (!client->isScanning()) {
+                    ESP_LOGW(TAG, " Restarting discovery scan...");
+                    client->startDiscoveryScan(10000);
+                }
             }
         }
     }
 
-    // Cleanup (nunca se alcanza)
+    // Cleanup (never reached)
     delete ble;
 }

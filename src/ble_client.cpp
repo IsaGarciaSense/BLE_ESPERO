@@ -742,8 +742,46 @@ void BLEClient::gattcCallback(esp_gattc_cb_event_t event, esp_gatt_if_t gattCInt
 bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
     bool hasTargetService = false;
 
-    bool macMatch = (memcmp(scanResult->scan_rst.bda, config_.targetServerMACadd, ESP_BD_ADDR_LEN) == 0);
+    bool macMatch = false;
+
+    uint8_t zeroMac[ESP_BD_ADDR_LEN] = {0};
     
+    if(memcmp(config_.targetServerMACadd, zeroMac, ESP_BD_ADDR_LEN) != 0) {
+        macMatch = (memcmp(scanResult->scan_rst.bda, config_.targetServerMACadd, ESP_BD_ADDR_LEN) == 0);
+    } 
+    
+    bool nameMatch =false;
+
+    if(strlen(config_.targetDeviceName) > 0) {
+        char deviceName[BLE_MAX_DEVICE_NAME_LEN] = {0};
+        if (scanResult->scan_rst.adv_data_len > 0) {
+            uint8_t *advData = scanResult->scan_rst.ble_adv;
+            uint8_t advDataLen = scanResult->scan_rst.adv_data_len;
+
+            for (int i = 0; i < advDataLen; ) {
+                uint8_t length = advData[i];
+                if (length == 0) break;
+
+                uint8_t type = advData[i + 1];
+
+                // Buscar nombre del dispositivo
+                if (type == 0x09 || type == 0x08) {  // Complete o shortened local name
+                    uint8_t nameLen = length - 1;
+                    if (nameLen > 0 && nameLen < BLE_MAX_DEVICE_NAME_LEN) {
+                        memcpy(deviceName, &advData[i + 2], nameLen);
+                        deviceName[nameLen] = '\0';
+                    }
+                    break;
+                }
+                
+                i += length + 1;
+            }
+        }
+
+        nameMatch = (strcmp(deviceName, config_.targetDeviceName) == 0);
+    } 
+
+
     if (securityConfig_.useCustomUUIDS && scanResult->scan_rst.adv_data_len > 0) {
         uint8_t *advData = scanResult->scan_rst.ble_adv;
         uint8_t advDataLen = scanResult->scan_rst.adv_data_len;
@@ -764,7 +802,9 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
             i += length + 1;
         }
     }
-    
+
+    bool deviceMatch = macMatch || nameMatch;
+        
     bool securityOk = false;
     switch (securityConfig_.level) {
         case BLE_SECURITY_NONE:
@@ -782,7 +822,7 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
             break;
     }
 
-    bool finalResult = macMatch && securityOk;
+    bool finalResult = deviceMatch && securityOk;
 
     // Debug logging simplificado - ONLY MAC
     char foundMac[18], targetMac[18];
