@@ -62,7 +62,7 @@ extern "C" void app_main() {
     }
     
     // Personalizar configuración
-    strncpy(config.deviceName, "SenseAI_BLE", BLE_MAX_DEVICE_NAME_LEN - 1);
+    strncpy(config.deviceName, "HiveSense", BLE_MAX_DEVICE_NAME_LEN - 1);
     config.autoStart = false; // Controlaremos manualmente
     config.enableLogging = true;
     config.logLevel = ESP_LOG_INFO;
@@ -83,6 +83,13 @@ extern "C" void app_main() {
     BLEServer* server = ble->getServer();
     if (server != nullptr) {
         ESP_LOGI(TAG, "Settings server");
+
+        esp_err_t name_ret = server->setDeviceName("HiveSense");
+        if (name_ret == ESP_OK) {
+            ESP_LOGI(TAG, "Device name successfully set to HiveSense");
+        } else {
+            ESP_LOGW(TAG, "Failed to set device name: %s", esp_err_to_name(name_ret));
+        }
         
         bleServerConfig_t server_config = server->getConfig();
         server_config.dataUpdateInterval = 0;    
@@ -91,6 +98,7 @@ extern "C" void app_main() {
         server_config.enableNotifications = true;
         server_config.autoStartAdvertising = false;
         server_config.enableJsonCommands = true;
+        strncpy(server_config.deviceName, "HiveSense", BLE_MAX_DEVICE_NAME_LEN - 1);
 
         ret = server->setConfig(server_config);
         if (ret != ESP_OK) {
