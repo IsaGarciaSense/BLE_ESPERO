@@ -212,6 +212,14 @@ esp_err_t BLEServer::init() {
         ESP_LOGE(TAG, "Failed to initialize BLE common: %s", esp_err_to_name(ret));
         return ret;
     }
+
+    ret = esp_ble_gatt_set_local_mtu(BLE_MAX_MTU_SIZE);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set local MTU: %s", esp_err_to_name(ret));
+        // return ret;
+    }else {
+        ESP_LOGI(TAG, "Local MTU set to %d", BLE_MAX_MTU_SIZE);
+    }
     
     // Register GAP callback
     ret = esp_ble_gap_register_callback(gapCallback);
@@ -410,19 +418,71 @@ esp_err_t BLEServer::setCustomData(const char* data) {
 /*                              JSON Response Methods                         */
 /******************************************************************************/
 
+esp_err_t BLEServer::sendDataSizeNotification(uint16_t connID, size_t dataSize, uint16_t chunkSize) {
+    cJSON *notification = cJSON_CreateObject();
+    
+    cJSON_AddStringToObject(notification, "type", "large_data_incoming");
+    cJSON_AddNumberToObject(notification, "total_size", dataSize);
+    cJSON_AddNumberToObject(notification, "chunk_size", chunkSize);
+    cJSON_AddNumberToObject(notification, "estimated_chunks", (dataSize + chunkSize - 1) / chunkSize);
+    cJSON_AddStringToObject(notification, "status", "prepare_to_receive");
+    
+    char *json_string = cJSON_Print(notification);
+    
+    // Enviar como una notificación pequeña
+    esp_err_t ret = esp_ble_gatts_send_indicate(gattsInter_, connID, customCharHandle_,
+                                               strlen(json_string), (uint8_t*)json_string, false);
+    
+    free(json_string);
+    cJSON_Delete(notification);
+    
+    return ret;
+}
+
+esp_err_t BLEServer::sendTransferCompleteNotification(uint16_t connID, size_t totalSize, size_t chunksUsed) {
+    cJSON *notification = cJSON_CreateObject();
+    
+    cJSON_AddStringToObject(notification, "type", "transfer_complete");
+    cJSON_AddNumberToObject(notification, "total_size", totalSize);
+    cJSON_AddNumberToObject(notification, "chunks_sent", chunksUsed);
+    cJSON_AddStringToObject(notification, "status", "success");
+    
+    char *json_string = cJSON_Print(notification);
+    
+    esp_err_t ret = esp_ble_gatts_send_indicate(gattsInter_, connID, customCharHandle_,
+                                               strlen(json_string), (uint8_t*)json_string, false);
+    
+    free(json_string);
+    cJSON_Delete(notification);
+    
+    return ret;
+}
+
+
 esp_err_t BLEServer::sendJsonResponse(uint16_t connID, const char* jsonResponse) {
     if (!jsonResponse) {
         return ESP_ERR_INVALID_ARG;
     }
     
+    // Obtener MTU negociado específico del cliente
+    uint16_t clientMTU = getClientMTU(connID);
+    uint16_t chunk_size = clientMTU - 3;  // Restar header ATT
     size_t json_len = strlen(jsonResponse);
-    const size_t chunk_size = 200; // Conservative size for BLE
     
-    ESP_LOGI(TAG, "Sending JSON response to client %d (%zu bytes)", connID, json_len);
-    ESP_LOGD(TAG, "JSON: %s", jsonResponse);
+    ESP_LOGI(TAG, "Sending JSON response to client %d (%zu bytes) using MTU %d (chunk size: %d)", 
+             connID, json_len, clientMTU, chunk_size);
+    
+    // Si es muy grande, notificar al cliente primero
+    if (json_len > chunk_size) {
+        esp_err_t prep_ret = sendDataSizeNotification(connID, json_len, chunk_size);
+        if (prep_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to send size notification: %s", esp_err_to_name(prep_ret));
+        }
+        vTaskDelay(pdMS_TO_TICKS(50)); // Dar tiempo al cliente para prepararse
+    }
     
     if (json_len <= chunk_size) {
-        // Send in one piece if small enough
+        // Enviar en una sola pieza
         esp_err_t ret = esp_ble_gatts_send_indicate(gattsInter_, connID, customCharHandle_,
                                                    json_len, (uint8_t*)jsonResponse, false);
         if (ret == ESP_OK) {
@@ -430,21 +490,37 @@ esp_err_t BLEServer::sendJsonResponse(uint16_t connID, const char* jsonResponse)
         }
         return ret;
     } else {
-        // Send in chunks
+        // Enviar en chunks con información de progreso
         esp_err_t result = ESP_OK;
+        size_t total_chunks = (json_len + chunk_size - 1) / chunk_size;
+        
         for (size_t i = 0; i < json_len; i += chunk_size) {
             size_t copy_len = (json_len - i < chunk_size) ? json_len - i : chunk_size;
+            size_t current_chunk = (i / chunk_size) + 1;
+            
+            ESP_LOGD(TAG, "Sending chunk %zu/%zu (%zu bytes) to client %d", 
+                     current_chunk, total_chunks, copy_len, connID);
             
             esp_err_t ret = esp_ble_gatts_send_indicate(gattsInter_, connID, customCharHandle_,
                                                        copy_len, (uint8_t*)(jsonResponse + i), false);
             if (ret == ESP_OK) {
                 stats_.dataSent++;
-                vTaskDelay(pdMS_TO_TICKS(50)); // Small delay between chunks
+                
+                // Delay adaptivo basado en MTU
+                uint32_t delay = (clientMTU > 100) ? 20 : 50;
+                vTaskDelay(pdMS_TO_TICKS(delay));
             } else {
+                ESP_LOGE(TAG, "Failed to send chunk %zu/%zu: %s", current_chunk, total_chunks, esp_err_to_name(ret));
                 result = ret;
                 break;
             }
         }
+        
+        // Enviar notificación de completado
+        if (result == ESP_OK) {
+            sendTransferCompleteNotification(connID, json_len, total_chunks);
+        }
+        
         return result;
     }
 }
@@ -717,6 +793,10 @@ esp_err_t BLEServer::addClientSession(uint16_t connID, const esp_bd_addr_t clien
                 clientSessions_[i].jsonBufferPos = 0;
                 memset(clientSessions_[i].jsonBuffer, 0, sizeof(clientSessions_[i].jsonBuffer));
                 
+                clientSessions_[i].negotiatedMTU = BLE_DEFAULT_MTU_SIZE; // Default MTU
+                clientSessions_[i].effectiveDataSize = BLE_DEFAULT_MTU_SIZE - 3; // Default effective data size
+                clientSessions_[i].maxJsonSize = 80; // 4 chunks of 20 bytes
+
                 status_.connectedClients++;
                 stats_.totalConnections++;
                 stats_.currentClients++;
@@ -1021,6 +1101,75 @@ esp_err_t BLEServer::generateStatusReport(char* buffer, size_t buffer_size) cons
     return ESP_OK;
 }
 
+esp_err_t BLEServer::setClientMTU(uint16_t connID, uint16_t mtu) {
+    if (xSemaphoreTake(clientsMutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        for (int i = 0; i < maxClients_; i++) {
+            if (clientSessions_[i].connID == connID) {
+                clientSessions_[i].negotiatedMTU = mtu;
+                clientSessions_[i].effectiveDataSize = mtu - 3;  // Restar header ATT
+                clientSessions_[i].maxJsonSize = (mtu - 3) * 4;  // Permitir hasta 4 chunks
+                
+                ESP_LOGI(TAG, "Client %d MTU set to %d bytes (effective data: %d bytes, max JSON: %d bytes)", 
+                         connID, mtu, clientSessions_[i].effectiveDataSize, clientSessions_[i].maxJsonSize);
+                
+                xSemaphoreGive(clientsMutex_);
+                return ESP_OK;
+            }
+        }
+        xSemaphoreGive(clientsMutex_);
+    }
+    
+    ESP_LOGW(TAG, "Client %d not found for MTU update", connID);
+    return ESP_ERR_NOT_FOUND;
+}
+
+uint16_t BLEServer::getClientMTU(uint16_t connID) const {
+    uint16_t mtu = BLE_DEFAULT_MTU_SIZE;  // MTU por defecto
+    
+    if (xSemaphoreTake(clientsMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (int i = 0; i < maxClients_; i++) {
+            if (clientSessions_[i].connID == connID) {
+                mtu = clientSessions_[i].negotiatedMTU;
+                break;
+            }
+        }
+        xSemaphoreGive(clientsMutex_);
+    }
+    
+    return mtu;
+}
+
+esp_err_t BLEServer::sendMTUCapabilitiesInfo(uint16_t connID, uint16_t negotiatedMTU) {
+    // Crear JSON con información de las capacidades negociadas
+    cJSON *capabilities = cJSON_CreateObject();
+    cJSON *mtu_info = cJSON_CreateObject();
+    
+    cJSON_AddNumberToObject(mtu_info, "negotiated_mtu", negotiatedMTU);
+    cJSON_AddNumberToObject(mtu_info, "max_data_size", negotiatedMTU - 3);
+    cJSON_AddNumberToObject(mtu_info, "recommended_chunk_size", (negotiatedMTU - 3));
+    cJSON_AddStringToObject(mtu_info, "chunking_support", "automatic");
+    
+    cJSON_AddItemToObject(capabilities, "mtu_capabilities", mtu_info);
+    cJSON_AddStringToObject(capabilities, "type", "mtu_negotiation_complete");
+    cJSON_AddNumberToObject(capabilities, "timestamp", bleGetTimestamp() / 1000);
+    
+    char *json_string = cJSON_Print(capabilities);
+    
+    esp_err_t ret = sendJsonResponse(connID, json_string);
+    
+    free(json_string);
+    cJSON_Delete(capabilities);
+    
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "MTU capabilities sent to client %d", connID);
+    } else {
+        ESP_LOGW(TAG, "Failed to send MTU capabilities to client %d: %s", connID, esp_err_to_name(ret));
+    }
+    
+    return ret;
+}
+
+
 /******************************************************************************/
 /*                              Internal Tasks                                */
 /******************************************************************************/
@@ -1191,6 +1340,16 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                 esp_ble_gatts_create_service(gatts_if, &service_id, 10);
             }
             break;
+         
+        case ESP_GATTS_MTU_EVT:
+            ESP_LOGI(TAG, " MTU exchange completed: conn_id=%d, MTU=%d", 
+                    param->mtu.conn_id, param->mtu.mtu);
+            
+            // Actualizar MTU en la sesión del cliente si es necesario
+            instance_->setClientMTU(param->mtu.conn_id, param->mtu.mtu);
+
+            instance_->sendMTUCapabilitiesInfo(param->mtu.conn_id, param->mtu.mtu);
+            break;
             
         case ESP_GATTS_CREATE_EVT:
             ESP_LOGI(TAG, "Service created: service_handle=%d", param->create.service_handle);
@@ -1254,207 +1413,241 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             break;
             
         case ESP_GATTS_CONNECT_EVT:
-            ESP_LOGI(TAG, "Client connected: conn_id=%d", param->connect.conn_id);
-            
-            // Add client session
-            instance_->addClientSession(param->connect.conn_id, param->connect.remote_bda);
-            
-            // Update server state
-            instance_->state_ = BLE_SERVER_CONNECTED;
-            instance_->status_.state = instance_->state_;
-            
-            // El ESP32 detiene automáticamente el advertising al conectarse un cliente
-            // Actualizamos nuestro estado interno para reflejar esto
-            instance_->status_.advertisingActive = false;
-            
-            // Call user callback
-            if (instance_->clientConnectedCB_) {
-                bleDeviceInfo_t client_info;
-                memcpy(client_info.address, param->connect.remote_bda, sizeof(esp_bd_addr_t));
-                client_info.rssi = 0;  // RSSI not available in connect event
-                client_info.authenticated = !instance_->config_.requireAuthentication;
-                client_info.lastSeen = bleGetTimestamp();
-                strcpy(client_info.name, "Unknown");
+            {
+                ESP_LOGI(TAG, "Client connected: conn_id=%d", param->connect.conn_id);
                 
-                instance_->clientConnectedCB_(param->connect.conn_id, &client_info);
-            }
-
-            // Reiniciar advertising inmediatamente si no hemos alcanzado el máximo de clientes
-            if (instance_->status_.connectedClients < instance_->maxClients_) {
-                if (instance_->config_.autoStartAdvertising) {
-                    ESP_LOGI(TAG, "Restarting advertising to allow more connections (%d/%d clients)", 
-                            instance_->status_.connectedClients, instance_->maxClients_);
-                    vTaskDelay(pdMS_TO_TICKS(50)); // Pequeño delay para estabilidad
-                    instance_->startAdvertising();
+                // Add client session
+                instance_->addClientSession(param->connect.conn_id, param->connect.remote_bda);
+                
+                ESP_LOGI(TAG, "Initiating MTU negotiation for client %d", param->connect.conn_id);
+                esp_err_t mtu_ret = esp_ble_gattc_send_mtu_req(gatts_if, param->connect.conn_id);
+                if (mtu_ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to send MTU request to client %d: %s", 
+                            param->connect.conn_id, esp_err_to_name(mtu_ret));
+                    instance_->setClientMTU(param->connect.conn_id, BLE_DEFAULT_MTU_SIZE);
                 }
-            } else {
-                ESP_LOGI(TAG, "Maximum clients connected (%d/%d), keeping advertising stopped", 
-                        instance_->status_.connectedClients, instance_->maxClients_);
+
+
+                // Update server state
+                instance_->state_ = BLE_SERVER_CONNECTED;
+                instance_->status_.state = instance_->state_;
+                
+                // El ESP32 detiene automáticamente el advertising al conectarse un cliente
+                // Actualizamos nuestro estado interno para reflejar esto
+                instance_->status_.advertisingActive = false;
+                
+                // Call user callback
+                if (instance_->clientConnectedCB_) {
+                    bleDeviceInfo_t client_info;
+                    memcpy(client_info.address, param->connect.remote_bda, sizeof(esp_bd_addr_t));
+                    client_info.rssi = 0;  // RSSI not available in connect event
+                    client_info.authenticated = !instance_->config_.requireAuthentication;
+                    client_info.lastSeen = bleGetTimestamp();
+                    strcpy(client_info.name, "Unknown");
+                    
+                    instance_->clientConnectedCB_(param->connect.conn_id, &client_info);
+                }
+
+                // Reiniciar advertising inmediatamente si no hemos alcanzado el máximo de clientes
+                if (instance_->status_.connectedClients < instance_->maxClients_) {
+                    if (instance_->config_.autoStartAdvertising) {
+                        ESP_LOGI(TAG, "Restarting advertising to allow more connections (%d/%d clients)", 
+                                instance_->status_.connectedClients, instance_->maxClients_);
+                        vTaskDelay(pdMS_TO_TICKS(50)); // Pequeño delay para estabilidad
+                        instance_->startAdvertising();
+                    }
+                } else {
+                    ESP_LOGI(TAG, "Maximum clients connected (%d/%d), keeping advertising stopped", 
+                            instance_->status_.connectedClients, instance_->maxClients_);
+                }
+                break;
             }
-            break;
             
         case ESP_GATTS_DISCONNECT_EVT:
-            ESP_LOGI(TAG, "Client disconnected: conn_id=%d, reason=%d", 
+            {
+                ESP_LOGI(TAG, "Client disconnected: conn_id=%d, reason=%d", 
                     param->disconnect.conn_id, param->disconnect.reason);
             
-            // Remove client session
-            instance_->removeClientSession(param->disconnect.conn_id);
-            
-            // Update server state if no more clients
-            if (instance_->status_.connectedClients == 0) {
-                instance_->state_ = BLE_SERVER_READY;
-                instance_->status_.state = instance_->state_;
-            }
-            
-            // Call user callback
-            if (instance_->clientDisconnectedCB_) {
-                instance_->clientDisconnectedCB_(param->disconnect.conn_id, param->disconnect.reason);
-            }
-            
-            // SIEMPRE reiniciar advertising después de desconexión (si auto-advertising está habilitado)
-            if (instance_->config_.autoStartAdvertising) {
-                ESP_LOGI(TAG, "Client disconnected - restarting advertising (%d/%d clients remaining)", 
-                        instance_->status_.connectedClients, instance_->maxClients_);
+                // Remove client session
+                instance_->removeClientSession(param->disconnect.conn_id);
                 
-                // Pequeño delay para asegurar que la desconexión se complete
-                vTaskDelay(pdMS_TO_TICKS(100));
-                
-                esp_err_t ret = instance_->startAdvertising();
-                if (ret != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to restart advertising after disconnection: %s", esp_err_to_name(ret));
-                } else {
-                    ESP_LOGI(TAG, "Advertising restarted successfully after client disconnection");
+                // Update server state if no more clients
+                if (instance_->status_.connectedClients == 0) {
+                    instance_->state_ = BLE_SERVER_READY;
+                    instance_->status_.state = instance_->state_;
                 }
-            } else {
-                ESP_LOGW(TAG, "Auto-advertising disabled - advertising not restarted");
+                
+                // Call user callback
+                if (instance_->clientDisconnectedCB_) {
+                    instance_->clientDisconnectedCB_(param->disconnect.conn_id, param->disconnect.reason);
+                }
+                
+                // SIEMPRE reiniciar advertising después de desconexión (si auto-advertising está habilitado)
+                if (instance_->config_.autoStartAdvertising) {
+                    ESP_LOGI(TAG, "Client disconnected - restarting advertising (%d/%d clients remaining)", 
+                            instance_->status_.connectedClients, instance_->maxClients_);
+                    
+                    // Pequeño delay para asegurar que la desconexión se complete
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    
+                    esp_err_t ret = instance_->startAdvertising();
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to restart advertising after disconnection: %s", esp_err_to_name(ret));
+                    } else {
+                        ESP_LOGI(TAG, "Advertising restarted successfully after client disconnection");
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Auto-advertising disabled - advertising not restarted");
+                }
+                break;
             }
-            break;
             
         case ESP_GATTS_READ_EVT:
-            ESP_LOGD(TAG, "Read request: conn_id=%d, handle=%d", 
-                    param->read.conn_id, param->read.handle);
-            
-            esp_gatt_rsp_t response;
-            memset(&response, 0, sizeof(response));
-            response.attr_value.handle = param->read.handle;
-            
-            if (param->read.handle == instance_->batteryCharHandle_) {
-                response.attr_value.len = 1;
-                response.attr_value.value[0] = instance_->batteryLevel_;
+            {
+                ESP_LOGD(TAG, "Read request: conn_id=%d, handle=%d", 
+                        param->read.conn_id, param->read.handle);
                 
-                if (instance_->dataReadCB_) {
-                    instance_->dataReadCB_(param->read.conn_id, "battery");
-                }
-            } else if (param->read.handle == instance_->customCharHandle_) {
-                response.attr_value.len = strlen(instance_->customData_);
-                memcpy(response.attr_value.value, instance_->customData_, response.attr_value.len);
+                esp_gatt_rsp_t response;
+                memset(&response, 0, sizeof(response));
+                response.attr_value.handle = param->read.handle;
                 
-                if (instance_->dataReadCB_) {
-                    instance_->dataReadCB_(param->read.conn_id, "custom");
-                }
-            }
-            
-            esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id,
-                                       ESP_GATT_OK, &response);
-            
-            // Update client activity
-            if (xSemaphoreTake(instance_->clientsMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
-                for (int i = 0; i < instance_->maxClients_; i++) {
-                    if (instance_->clientSessions_[i].connID == param->read.conn_id) {
-                        instance_->clientSessions_[i].lastActivity = bleGetTimestamp();
-                        break;
+                if (param->read.handle == instance_->batteryCharHandle_) {
+                    response.attr_value.len = 1;
+                    response.attr_value.value[0] = instance_->batteryLevel_;
+                    
+                    if (instance_->dataReadCB_) {
+                        instance_->dataReadCB_(param->read.conn_id, "battery");
+                    }
+                } else if (param->read.handle == instance_->customCharHandle_) {
+                    response.attr_value.len = strlen(instance_->customData_);
+                    memcpy(response.attr_value.value, instance_->customData_, response.attr_value.len);
+                    
+                    if (instance_->dataReadCB_) {
+                        instance_->dataReadCB_(param->read.conn_id, "custom");
                     }
                 }
-                xSemaphoreGive(instance_->clientsMutex_);
-            }
-            break;
-            
-        case ESP_GATTS_WRITE_EVT:
-            ESP_LOGD(TAG, "Write request: conn_id=%d, handle=%d, len=%d", 
-                    param->write.conn_id, param->write.handle, param->write.len);
-            
-            if (param->write.handle == instance_->customCharHandle_) {
-                // Process JSON data if enabled
-                if (instance_->config_.enableJsonCommands) {
-                    instance_->processJsonData(param->write.conn_id, param->write.value, param->write.len);
-                } else {
-                    // Update custom data from client write (legacy mode)
-                    char new_data[BLE_MAX_CUSTOM_DATA_LEN];
-                    size_t copy_len = (param->write.len < BLE_MAX_CUSTOM_DATA_LEN - 1) ? 
-                                     param->write.len : BLE_MAX_CUSTOM_DATA_LEN - 1;
-                    
-                    memcpy(new_data, param->write.value, copy_len);
-                    new_data[copy_len] = '\0';
-                    
-                    instance_->setCustomData(new_data);
-                }
                 
-                instance_->stats_.dataReceived++;
+                esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id,
+                                        ESP_GATT_OK, &response);
                 
-                if (instance_->dataWrittenCB_) {
-                    instance_->dataWrittenCB_(param->write.conn_id, param->write.value, param->write.len);
-                }
-                
-                // Update client activity and stats
+                // Update client activity
                 if (xSemaphoreTake(instance_->clientsMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
                     for (int i = 0; i < instance_->maxClients_; i++) {
-                        if (instance_->clientSessions_[i].connID == param->write.conn_id) {
+                        if (instance_->clientSessions_[i].connID == param->read.conn_id) {
                             instance_->clientSessions_[i].lastActivity = bleGetTimestamp();
-                            instance_->clientSessions_[i].dataReceived++;
                             break;
                         }
                     }
                     xSemaphoreGive(instance_->clientsMutex_);
                 }
+                break;
             }
-            
-            if (param->write.need_rsp) {
-                esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id,
-                                           ESP_GATT_OK, NULL);
-            }
-            break;
-            
-        case ESP_GATTS_ADD_CHAR_DESCR_EVT:
-            if (param->add_char_descr.status == ESP_GATT_OK) {
-                ESP_LOGI(TAG, "CCCD descriptor added: handle=%d, service_handle=%d", 
-                        param->add_char_descr.attr_handle, param->add_char_descr.service_handle);
-                        
-                // Check if this is the first descriptor (battery CCCD)
-                if (instance_->batteryDescrHandle_ == BLE_INVALID_HANDLE) {
-                    instance_->batteryDescrHandle_ = param->add_char_descr.attr_handle;
-                    ESP_LOGI(TAG, "Battery CCCD descriptor handle stored: %d", instance_->batteryDescrHandle_);
-                    
-                    // Now add the custom characteristic
-                    esp_bt_uuid_t custom_char_uuid;
-                    if (instance_->securityConfig_.useCustomUUIDS) {
-                        custom_char_uuid.len = ESP_UUID_LEN_128;
-                        memcpy(custom_char_uuid.uuid.uuid128, 
-                               instance_->securityConfig_.customCharUUID, 16);
+        case ESP_GATTS_WRITE_EVT:
+            {
+                ESP_LOGD(TAG, "Write request: conn_id=%d, handle=%d, len=%d", 
+                        param->write.conn_id, param->write.handle, param->write.len);
+                
+                if (param->write.handle == instance_->customCharHandle_) {
+                    // Process JSON data if enabled
+                    if (instance_->config_.enableJsonCommands) {
+                        instance_->processJsonData(param->write.conn_id, param->write.value, param->write.len);
                     } else {
-                        custom_char_uuid.len = ESP_UUID_LEN_16;
-                        custom_char_uuid.uuid.uuid16 = BLE_DEFAULT_CUSTOM_CHAR_UUID;
+                        // Update custom data from client write (legacy mode)
+                        char new_data[BLE_MAX_CUSTOM_DATA_LEN];
+                        size_t copy_len = (param->write.len < BLE_MAX_CUSTOM_DATA_LEN - 1) ? 
+                                        param->write.len : BLE_MAX_CUSTOM_DATA_LEN - 1;
+                        
+                        memcpy(new_data, param->write.value, copy_len);
+                        new_data[copy_len] = '\0';
+                        
+                        instance_->setCustomData(new_data);
                     }
                     
-                    esp_ble_gatts_add_char(instance_->serviceHandle_, &custom_char_uuid,
-                                          ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-                                          ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE | 
-                                          ESP_GATT_CHAR_PROP_BIT_NOTIFY,
-                                          NULL, NULL);
-                } else if (instance_->customDescrHandle_ == BLE_INVALID_HANDLE) {
-                    instance_->customDescrHandle_ = param->add_char_descr.attr_handle;
-                    ESP_LOGI(TAG, "Custom CCCD descriptor handle stored: %d", instance_->customDescrHandle_);
-                    ESP_LOGI(TAG, "All characteristics and descriptors added successfully!");
+                    instance_->stats_.dataReceived++;
+                    
+                    if (instance_->dataWrittenCB_) {
+                        instance_->dataWrittenCB_(param->write.conn_id, param->write.value, param->write.len);
+                    }
+                    
+                    // Update client activity and stats
+                    if (xSemaphoreTake(instance_->clientsMutex_, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        for (int i = 0; i < instance_->maxClients_; i++) {
+                            if (instance_->clientSessions_[i].connID == param->write.conn_id) {
+                                instance_->clientSessions_[i].lastActivity = bleGetTimestamp();
+                                instance_->clientSessions_[i].dataReceived++;
+                                break;
+                            }
+                        }
+                        xSemaphoreGive(instance_->clientsMutex_);
+                    }
                 }
-            } else {
-                ESP_LOGE(TAG, "Failed to add CCCD descriptor: status=%d", param->add_char_descr.status);
-            }
-            break;
-            
+                
+                if (param->write.need_rsp) {
+                    esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id,
+                                            ESP_GATT_OK, NULL);
+                }
+                break;
+            }    
+        case ESP_GATTS_ADD_CHAR_DESCR_EVT:
+            {
+                if (param->add_char_descr.status == ESP_GATT_OK) {
+                    ESP_LOGI(TAG, "CCCD descriptor added: handle=%d, service_handle=%d", 
+                            param->add_char_descr.attr_handle, param->add_char_descr.service_handle);
+                            
+                    // Check if this is the first descriptor (battery CCCD)
+                    if (instance_->batteryDescrHandle_ == BLE_INVALID_HANDLE) {
+                        instance_->batteryDescrHandle_ = param->add_char_descr.attr_handle;
+                        ESP_LOGI(TAG, "Battery CCCD descriptor handle stored: %d", instance_->batteryDescrHandle_);
+                        
+                        // Now add the custom characteristic
+                        esp_bt_uuid_t custom_char_uuid;
+                        if (instance_->securityConfig_.useCustomUUIDS) {
+                            custom_char_uuid.len = ESP_UUID_LEN_128;
+                            memcpy(custom_char_uuid.uuid.uuid128, 
+                                instance_->securityConfig_.customCharUUID, 16);
+                        } else {
+                            custom_char_uuid.len = ESP_UUID_LEN_16;
+                            custom_char_uuid.uuid.uuid16 = BLE_DEFAULT_CUSTOM_CHAR_UUID;
+                        }
+                        
+                        esp_ble_gatts_add_char(instance_->serviceHandle_, &custom_char_uuid,
+                                            ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+                                            ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_WRITE | 
+                                            ESP_GATT_CHAR_PROP_BIT_NOTIFY,
+                                            NULL, NULL);
+                    } else if (instance_->customDescrHandle_ == BLE_INVALID_HANDLE) {
+                        instance_->customDescrHandle_ = param->add_char_descr.attr_handle;
+                        ESP_LOGI(TAG, "Custom CCCD descriptor handle stored: %d", instance_->customDescrHandle_);
+                        ESP_LOGI(TAG, "All characteristics and descriptors added successfully!");
+                    }
+                } else {
+                    ESP_LOGE(TAG, "Failed to add CCCD descriptor: status=%d", param->add_char_descr.status);
+                }
+                break;
+            }    
         case ESP_GATTS_CONF_EVT:
             ESP_LOGD(TAG, "Notification confirmed: conn_id=%d, status=%d", 
                     param->conf.conn_id, param->conf.status);
             break;
-            
+        
+        case ESP_GATTS_EXEC_WRITE_EVT:
+        case ESP_GATTS_UNREG_EVT:
+        case ESP_GATTS_ADD_INCL_SRVC_EVT:
+        case ESP_GATTS_DELETE_EVT:
+        case ESP_GATTS_STOP_EVT:
+        case ESP_GATTS_OPEN_EVT:
+        case ESP_GATTS_CANCEL_OPEN_EVT:
+        case ESP_GATTS_CLOSE_EVT:
+        case ESP_GATTS_LISTEN_EVT:
+        case ESP_GATTS_CONGEST_EVT:
+        case ESP_GATTS_RESPONSE_EVT:
+        case ESP_GATTS_CREAT_ATTR_TAB_EVT:
+        case ESP_GATTS_SET_ATTR_VAL_EVT:
+        case ESP_GATTS_SEND_SERVICE_CHANGE_EVT:
+            // Casos no manejados actualmente
+            ESP_LOGD(TAG, "Unhandled GATTS event: %d", event);
+            break;
+
         default:
             ESP_LOGD(TAG, "GATTS event: %d", event);
             break;

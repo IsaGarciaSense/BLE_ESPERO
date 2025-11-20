@@ -13,6 +13,7 @@
 
 #include "ble_configs.hpp"
 
+
 /**
  * @enum bleClientState_t
  * @brief States specific to BLE client operations

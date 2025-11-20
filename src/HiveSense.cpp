@@ -25,6 +25,13 @@ awsHandler* awsHelper = nullptr;
 extern "C" void app_main() {
     ESP_LOGI(TAG, "=== HIVE FIRST STEPS ===");
 
+    esp_err_t mtu_ret = esp_ble_gatt_set_local_mtu(512);
+    if (mtu_ret == ESP_OK) {
+        ESP_LOGI(TAG, " Server local MTU set to 512 bytes");
+    } else {
+        ESP_LOGW(TAG, "Failed to set local MTU: %s", esp_err_to_name(mtu_ret));
+    }
+
     wifiHandler = new WifiHandler(userSSID, userPassword);
 
     if (wifiHandler->connectWifi() != ESP_OK) {
@@ -126,26 +133,26 @@ extern "C" void app_main() {
         });
 
         server->setDataWrittenCallback([](uint16_t connID, const uint8_t* data, uint16_t length) {
-            ESP_LOGI(TAG, " Client %d data received: %.*s", connID, length, data);
-            // Echo de vuelta los datos recibidos para testing
-            if (length > 0) {
-                char response[128];
-                snprintf(response, sizeof(response), "Server received: %.*s", length, data);
-                // Connect to AWS IoT Core via MQTT over TLS.
+            ESP_LOGI(TAG, " Client %d data received (%d bytes): %.*s", connID, length, length, data);
+            
+            if (length > 0) {                
                 if (awsHelper->connect() != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to connect to AWS IoT Core");
-                    return;
+                } else {                    
+                    // Convertir data a string segura
+                    char dataStr[length + 1];
+                    memcpy(dataStr, data, length);
+                    dataStr[length] = '\0';
+                    
+                    // snprintf(response, sizeof(response), "Sensor_%d_Fragment: %s", connID, dataStr);
+                    
+                    if (awsHelper->publish(mqttDataTopic, dataStr) != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to publish fragment to AWS");
+                    } else {
+                        ESP_LOGI(TAG, "Fragment from sensor %d published to AWS successfully", connID);
+                    }
+                    awsHelper->disconnect();
                 }
-
-                // Publish the current time to an AWS IoT Core topic (change the topic as needed).
-                if (awsHelper->publish(mqttDataTopic, response) != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to publish data to AWS");
-                } else {
-                    ESP_LOGI(TAG, "Data published to AWS successfully");
-                }
-
-                // Disconnect from AWS IoT Core.
-                awsHelper->disconnect();
             }
         });
 
@@ -200,10 +207,10 @@ extern "C" void app_main() {
                 ESP_LOGI(TAG, "   Free memory: %lu bytes", esp_get_free_heap_size());
                 ESP_LOGI(TAG, "===============================================");
                 
-                char status_data[64];
-                snprintf(status_data, sizeof(status_data), "Uptime:%llu Loop:%d Clients:%d ADV:%s", 
-                        ble->getUptime()/1000000, loopCount, (int)status.connectedClients,
-                        status.advertisingActive ? "ON" : "OFF");
+                // REDUCIR EL TAMAÑO PARA EVITAR EL WARNING DE BLE
+                char status_data[20]; // 20 bytes máximo para BLE
+                snprintf(status_data, sizeof(status_data), "UP:%d C:%d", 
+                        (int)(ble->getUptime()/1000000), (int)status.connectedClients);
                 server->setCustomData(status_data);
             }
             

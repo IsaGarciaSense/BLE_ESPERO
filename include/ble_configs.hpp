@@ -90,8 +90,11 @@
 
 #define BLE_MAX_DEVICE_NAME_LEN     32
 #define BLE_MAX_AUTH_KEY_LEN        32
-#define BLE_MAX_CUSTOM_DATA_LEN     64
+#define BLE_MAX_CUSTOM_DATA_LEN     100
 #define BLE_UUID_128_LEN            16
+
+#define BLE_MAX_MTU_SIZE            512
+#define BLE_DEFAULT_MTU_SIZE        23
 
 #define BLE_INVALID_HANDLE          0
 #define BLE_DEFAULT_SCAN_TIMEOUT    10000   // 10 seconds

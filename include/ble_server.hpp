@@ -71,6 +71,11 @@ typedef struct {
     uint32_t dataSent;                              ///< Data packets sent to this client
     uint32_t dataReceived;                          ///< Data packets received from this client
     bool notificationsEnabled;                      ///< Notifications enabled for this client
+    
+    uint16_t negotiatedMTU;                          ///< Negotiated MTU size
+    uint16_t effectiveDataSize;                     ///< Effective data size for payloads
+    uint16_t maxJsonSize;                           ///< Maximum JSON command size
+    
     char jsonBuffer[512];                           ///< Buffer for accumulating JSON data
     uint16_t jsonBufferPos;                         ///< Current position in JSON buffer
 } bleClientSession_t;
@@ -585,6 +590,11 @@ private:
     /**************************************************************************/
     /*                              Member Variables                          */
     /**************************************************************************/
+    esp_err_t setClientMTU(uint16_t connID, uint16_t mtu);
+    uint16_t getClientMTU(uint16_t connID) const;
+    esp_err_t sendDataSizeNotification(uint16_t connID, size_t dataSize, uint16_t chunkSize);
+    esp_err_t sendTransferCompleteNotification(uint16_t connID, size_t totalSize, size_t chunksUsed);
+    esp_err_t sendMTUCapabilitiesInfo(uint16_t connID, uint16_t negotiatedMTU); 
 
     bleServerConfig_t config_;                      ///< Server configuration
     bleServerState_t state_;                        ///< Current server state
