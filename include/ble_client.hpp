@@ -566,6 +566,14 @@ protected:
      * @param param GATTC callback parameters
      */
     void handleNotification(esp_ble_gattc_cb_param_t *param);
+    
+    /**
+     * @brief Handles incoming data, including chunked large data
+     * 
+     * @param data Raw data received
+     * @param length Length of data received
+     */
+    void handleIncomingData(const uint8_t* data, uint16_t length);
 
     /**
      * @brief Add device to the list of found devices (if it doesn't already exist)
@@ -582,6 +590,20 @@ protected:
      * @return bool True if already in the list, false if new
      */
     bool isDeviceAlreadyFound(const esp_bd_addr_t MACadd) const;
+    
+    /**
+     * @brief Gets the negotiated MTU with the server
+     * 
+     * @return uint16_t Negotiated MTU size in bytes
+     */
+    uint16_t getNegotiatedMTU() const;
+    
+    /**
+     * @brief Checks if MTU exchange has been completed
+     * 
+     * @return bool True if MTU exchange completed, false otherwise
+     */
+    bool isMTUExchangeCompleted() const;
 
 private:
 
@@ -600,6 +622,16 @@ private:
     uint16_t serviceEndHandle_;                 ///< Service end handle
     uint16_t batteryCharHandle_;                ///< Battery characteristic handle
     uint16_t customCharHandle_;                 ///< Custom characteristic handle
+
+    // MTU management
+    uint16_t negotiatedMTU_;                    ///< MTU negotiated with server
+    uint16_t localMTU_;                         ///< Local MTU capability
+    bool mtuExchangeCompleted_;                 ///< Flag if MTU exchange completed
+    
+    // Data chunking and buffering
+    char rxBuffer_[2048];                       ///< Buffer for incoming chunked data
+    uint16_t rxBufferPos_;                      ///< Current position in RX buffer
+    bool expectingLargeData_;                   ///< Flag if expecting large data transfer
 
     // Callbacks
     bleClientConnectedCB_t connectedCB_;      ///< Connection callback

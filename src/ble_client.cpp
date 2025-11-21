@@ -41,6 +41,11 @@ BLEClient::BLEClient()
     , serviceEndHandle_(0)
     , batteryCharHandle_(BLE_INVALID_HANDLE)
     , customCharHandle_(BLE_INVALID_HANDLE)
+    , negotiatedMTU_(23)                     // MTU por defecto
+    , localMTU_(512)                         // MTU local máximo
+    , mtuExchangeCompleted_(false)           // MTU exchange not completed
+    , rxBufferPos_(0)                        // RX buffer position
+    , expectingLargeData_(false)             // Not expecting large data
     , connectedCB_(nullptr)
     , disconnectedCB_(nullptr)
     , dataReceivedCB_(nullptr)
@@ -80,6 +85,9 @@ BLEClient::BLEClient()
 
     // List of found devices
     memset(foundDevices_, 0, sizeof(foundDevices_));
+    
+    // Initialize RX buffer
+    memset(rxBuffer_, 0, sizeof(rxBuffer_));
 
     // Create mutex
     stateMutex_ = xSemaphoreCreateMutex();
@@ -134,6 +142,16 @@ esp_err_t BLEClient::init() {
     }
 
     esp_err_t ret = ESP_OK;
+
+    // Configure local MTU BEFORE registering callbacks
+    ret = esp_ble_gatt_set_local_mtu(localMTU_);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to set local MTU: %s", esp_err_to_name(ret));
+        // Continue with default MTU
+        localMTU_ = 23;
+    } else {
+        ESP_LOGI(TAG, "Local MTU set to %d bytes", localMTU_);
+    }
 
     // Register GAP callback
     ret = esp_ble_gap_register_callback(gapCallback);
@@ -315,23 +333,80 @@ esp_err_t BLEClient::writeCustomData(const char* data) {
     }
 
     size_t dataLen = strlen(data);
-    if (dataLen > BLE_MAX_CUSTOM_DATA_LEN - 1) {
-        ESP_LOGW(TAG, "Data too long, truncating");
-        dataLen = BLE_MAX_CUSTOM_DATA_LEN - 1;
-    }
-
-    ESP_LOGD(TAG, "Writing custom data: %.*s", (int)dataLen, data);
-
-    esp_err_t ret = esp_ble_gattc_write_char(gattCInter_, connID_, customCharHandle_,
-                                           dataLen, (uint8_t*)data,
-                                           ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to write custom characteristic: %s", esp_err_to_name(ret));
-    } else {
-        stats_.dataSent++;
+    
+    // Esperar a que se complete el MTU exchange
+    uint32_t timeout = 0;
+    while (!mtuExchangeCompleted_ && timeout < 50) {  // 5 segundos máximo
+        vTaskDelay(pdMS_TO_TICKS(100));
+        timeout++;
     }
     
-    return ret;
+    if (!mtuExchangeCompleted_) {
+        ESP_LOGW(TAG, "MTU exchange not completed, using default MTU");
+        negotiatedMTU_ = 23;
+        mtuExchangeCompleted_ = true;
+    }
+
+    // Calcular tamaño de chunk efectivo
+    uint16_t effectiveChunkSize = negotiatedMTU_ - 3;  // Restar 3 bytes para header ATT
+    
+    ESP_LOGI(TAG, "Writing data (%zu bytes) using MTU %d (chunk size: %d)", 
+             dataLen, negotiatedMTU_, effectiveChunkSize);
+
+    if (dataLen <= effectiveChunkSize) {
+        // Enviar todo en una sola escritura
+        ESP_LOGI(TAG, "Sending data in single write (%zu bytes)", dataLen);
+        
+        esp_err_t ret = esp_ble_gattc_write_char(gattCInter_, connID_, customCharHandle_,
+                                                dataLen, (uint8_t*)data,
+                                                ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+        if (ret == ESP_OK) {
+            stats_.dataSent++;
+        } else {
+            ESP_LOGE(TAG, "Single write failed: %s", esp_err_to_name(ret));
+        }
+        return ret;
+    } else {
+        // Usar prepared write para datos largos
+        ESP_LOGI(TAG, "Using prepared write for large data (%zu bytes, %zu chunks)", 
+                 dataLen, (dataLen + effectiveChunkSize - 1) / effectiveChunkSize);
+        
+        esp_err_t ret = ESP_OK;
+        size_t chunksSent = 0;
+        
+        for (size_t offset = 0; offset < dataLen; offset += effectiveChunkSize) {
+            size_t writeLen = (dataLen - offset < effectiveChunkSize) ? 
+                             dataLen - offset : effectiveChunkSize;
+            
+            ESP_LOGD(TAG, "Preparing chunk %zu: offset=%zu, length=%zu", 
+                     chunksSent + 1, offset, writeLen);
+            
+            ret = esp_ble_gattc_prepare_write(gattCInter_, connID_, customCharHandle_,
+                                            offset, writeLen, (uint8_t*)(data + offset),
+                                            ESP_GATT_AUTH_REQ_NONE);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Prepare write chunk %zu failed: %s", 
+                         chunksSent + 1, esp_err_to_name(ret));
+                return ret;
+            }
+            
+            chunksSent++;
+            vTaskDelay(pdMS_TO_TICKS(20));  // Delay entre chunks
+        }
+        
+        // Ejecutar todas las escrituras preparadas
+        ESP_LOGI(TAG, "Executing prepared write (%zu chunks)", chunksSent);
+        ret = esp_ble_gattc_execute_write(gattCInter_, connID_, true);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Execute write failed: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "✅ Large data written successfully (%zu bytes in %zu chunks)", 
+                     dataLen, chunksSent);
+            stats_.dataSent++;
+        }
+        
+        return ret;
+    }
 }
 
 esp_err_t BLEClient::setNotifications(bool enable) {
@@ -710,6 +785,30 @@ void BLEClient::gattcCallback(esp_gattc_cb_event_t event, esp_gatt_if_t gattCInt
             instance_->handleConnect(param);
             break;
             
+        case ESP_GATTC_CFG_MTU_EVT:
+            ESP_LOGI(TAG, "MTU exchange result: conn_id=%d, status=%d, MTU=%d", 
+                    param->cfg_mtu.conn_id, param->cfg_mtu.status, param->cfg_mtu.mtu);
+            
+            if (param->cfg_mtu.status == ESP_GATT_OK) {
+                instance_->negotiatedMTU_ = param->cfg_mtu.mtu;
+                instance_->mtuExchangeCompleted_ = true;
+                
+                ESP_LOGI(TAG, "✅ MTU negotiated successfully: %d bytes (effective data: %d bytes)", 
+                         instance_->negotiatedMTU_, instance_->negotiatedMTU_ - 3);
+            } else {
+                ESP_LOGW(TAG, "MTU exchange failed, using default MTU: 23 bytes");
+                instance_->negotiatedMTU_ = 23;
+                instance_->mtuExchangeCompleted_ = true;
+            }
+            
+            // Continuar con service discovery después del MTU exchange
+            if (instance_->state_ == BLE_CLIENT_CONNECTED) {
+                ESP_LOGI(TAG, "Starting service discovery after MTU exchange");
+                instance_->state_ = BLE_CLIENT_DISCOVERING;
+                esp_ble_gattc_search_service(instance_->gattCInter_, instance_->connID_, nullptr);
+            }
+            break;
+            
         case ESP_GATTC_DISCONNECT_EVT:
             instance_->handleDisconnect(param);
             break;
@@ -982,10 +1081,24 @@ void BLEClient::handleConnect(esp_ble_gattc_cb_param_t *param) {
     state_ = BLE_CLIENT_CONNECTED;
     stats_.successfulConnections++;
     
-    // Start service discovery
-    ESP_LOGI(TAG, "Starting service discovery");
-    state_ = BLE_CLIENT_DISCOVERING;
-    esp_ble_gattc_search_service(gattCInter_, connID_, nullptr);
+    // Reset MTU state for new connection
+    mtuExchangeCompleted_ = false;
+    negotiatedMTU_ = 23;  // Reset to default
+    
+    // Iniciar negociación MTU inmediatamente
+    ESP_LOGI(TAG, "Requesting MTU exchange");
+    esp_err_t mtu_ret = esp_ble_gattc_send_mtu_req(gattCInter_, connID_);
+    if (mtu_ret != ESP_OK) {
+        ESP_LOGW(TAG, "MTU request failed: %s - proceeding with default", esp_err_to_name(mtu_ret));
+        negotiatedMTU_ = 23;
+        mtuExchangeCompleted_ = true;
+        
+        // Proceder con service discovery
+        ESP_LOGI(TAG, "Starting service discovery");
+        state_ = BLE_CLIENT_DISCOVERING;
+        esp_ble_gattc_search_service(gattCInter_, connID_, nullptr);
+    }
+    // Si MTU request es exitoso, el service discovery se iniciará en ESP_GATTC_CFG_MTU_EVT
 }
 
 void BLEClient::handleDisconnect(esp_ble_gattc_cb_param_t *param) {
@@ -1003,6 +1116,15 @@ void BLEClient::handleDisconnect(esp_ble_gattc_cb_param_t *param) {
     batteryCharHandle_ = BLE_INVALID_HANDLE;
     customCharHandle_ = BLE_INVALID_HANDLE;
     connectionStartTime_ = 0;
+    
+    // Reset MTU state
+    negotiatedMTU_ = 23;
+    mtuExchangeCompleted_ = false;
+    
+    // Reset chunking state
+    rxBufferPos_ = 0;
+    expectingLargeData_ = false;
+    memset(rxBuffer_, 0, sizeof(rxBuffer_));
 
     // Call disconnection callback
     if (disconnectedCB_ != nullptr) {
@@ -1120,18 +1242,16 @@ void BLEClient::handleCharacteristicRead(esp_ble_gattc_cb_param_t *param) {
     if (param->read.handle == batteryCharHandle_) {
         lastData_.batteryLevel = param->read.value[0];
         ESP_LOGI(TAG, "Battery level: %d%%", lastData_.batteryLevel);
+        
+        lastData_.timeStamp = bleGetTimestamp();
+        lastData_.valid = true;
+        
+        if (dataReceivedCB_ != nullptr) {
+            dataReceivedCB_(&lastData_);
+        }
     } else if (param->read.handle == customCharHandle_) {
-        memcpy(lastData_.customData, param->read.value, 
-               param->read.value_len < BLE_MAX_CUSTOM_DATA_LEN ? param->read.value_len : BLE_MAX_CUSTOM_DATA_LEN - 1);
-        lastData_.customData[param->read.value_len] = '\0';
-        ESP_LOGI(TAG, "Custom data: %s", lastData_.customData);
-    }
-
-    lastData_.timeStamp = bleGetTimestamp();
-    lastData_.valid = true;
-
-    if (dataReceivedCB_ != nullptr) {
-        dataReceivedCB_(&lastData_);
+        // Use the new method for handling chunked data
+        handleIncomingData(param->read.value, param->read.value_len);
     }
 }
 
@@ -1158,35 +1278,40 @@ void BLEClient::handleNotification(esp_ble_gattc_cb_param_t *param) {
     if (param->notify.handle == batteryCharHandle_) {
         lastData_.batteryLevel = param->notify.value[0];
         ESP_LOGI(TAG, "Battery notification: %d%%", lastData_.batteryLevel);
+        
+        lastData_.timeStamp = bleGetTimestamp();
+        lastData_.valid = true;
+        
+        if (dataReceivedCB_ != nullptr) {
+            dataReceivedCB_(&lastData_);
+        }
     } else if (param->notify.handle == customCharHandle_) {
-        memcpy(lastData_.customData, param->notify.value,
-               param->notify.value_len < BLE_MAX_CUSTOM_DATA_LEN ? param->notify.value_len : BLE_MAX_CUSTOM_DATA_LEN - 1);
-        lastData_.customData[param->notify.value_len] = '\0';
-        ESP_LOGI(TAG, "Custom notification: %s", lastData_.customData);
-
-        if (state_ == BLE_CLIENT_AUTHENTICATING && strcmp(lastData_.customData, "AUTH_OK") == 0) {
-            ESP_LOGI(TAG, "Authentication successful");
-            state_ = BLE_CLIENT_READY;
-
-            if (authCB_ != nullptr) {
-                authCB_(true, ESP_OK);
-            }
+        // Use the new method for handling chunked data
+        handleIncomingData(param->notify.value, param->notify.value_len);
+        
+        // Handle authentication (existing code)
+        if (state_ == BLE_CLIENT_AUTHENTICATING) {
+            char tempData[BLE_MAX_CUSTOM_DATA_LEN];
+            memcpy(tempData, param->notify.value, param->notify.value_len);
+            tempData[param->notify.value_len] = '\0';
             
-            if (connectedCB_ != nullptr) {
-                connectedCB_(&connectedDevice_);
-            }
-            
-            if (config_.readInterval > 0) {
-                xTaskCreate(dataReadTask, "ble_client_read", 4096, this, 5, &dataReadTaskHandle_);
+            if (strcmp(tempData, "AUTH_OK") == 0) {
+                ESP_LOGI(TAG, "Authentication successful");
+                state_ = BLE_CLIENT_READY;
+
+                if (authCB_ != nullptr) {
+                    authCB_(true, ESP_OK);
+                }
+                
+                if (connectedCB_ != nullptr) {
+                    connectedCB_(&connectedDevice_);
+                }
+                
+                if (config_.readInterval > 0) {
+                    xTaskCreate(dataReadTask, "ble_client_read", 4096, this, 5, &dataReadTaskHandle_);
+                }
             }
         }
-    }
-
-    lastData_.timeStamp = bleGetTimestamp();
-    lastData_.valid = true;
-
-    if (dataReceivedCB_ != nullptr) {
-        dataReceivedCB_(&lastData_);
     }
 }
 
@@ -1232,4 +1357,87 @@ void BLEClient::reconnectTask(void *pvParameters) {
     ESP_LOGI(TAG, "Reconnect task ended");
     client->reconnectTaskHandle_ = nullptr;
     vTaskDelete(nullptr);
+}
+
+/******************************************************************************/
+/*                         MTU and Chunking Support                          */
+/******************************************************************************/
+
+void BLEClient::handleIncomingData(const uint8_t* data, uint16_t length) {
+    // Verificar si es una notificación de tamaño de datos grandes
+    if (length < 100) {  // Mensajes de control son pequeños
+        char tempBuffer[256];
+        memcpy(tempBuffer, data, length);
+        tempBuffer[length] = '\0';
+        
+        // Verificar si es JSON de control
+        if (strstr(tempBuffer, "large_data_incoming") != nullptr) {
+            ESP_LOGI(TAG, "📥 Large data incoming notification received");
+            expectingLargeData_ = true;
+            rxBufferPos_ = 0;
+            memset(rxBuffer_, 0, sizeof(rxBuffer_));
+            return;
+        } else if (strstr(tempBuffer, "transfer_complete") != nullptr) {
+            ESP_LOGI(TAG, "✅ Transfer complete notification received");
+            
+            if (rxBufferPos_ > 0) {
+                rxBuffer_[rxBufferPos_] = '\0';
+                
+                // Procesar datos completos
+                memcpy(lastData_.customData, rxBuffer_, 
+                       rxBufferPos_ < BLE_MAX_CUSTOM_DATA_LEN ? rxBufferPos_ : BLE_MAX_CUSTOM_DATA_LEN - 1);
+                lastData_.customData[rxBufferPos_] = '\0';
+                lastData_.timeStamp = bleGetTimestamp();
+                lastData_.valid = true;
+                
+                ESP_LOGI(TAG, "📦 Large data assembled (%d bytes): %.*s", 
+                         rxBufferPos_, (rxBufferPos_ > 50 ? 50 : rxBufferPos_), rxBuffer_);
+                
+                if (dataReceivedCB_ != nullptr) {
+                    dataReceivedCB_(&lastData_);
+                }
+            }
+            
+            expectingLargeData_ = false;
+            rxBufferPos_ = 0;
+            return;
+        } else if (strstr(tempBuffer, "mtu_capabilities") != nullptr) {
+            ESP_LOGI(TAG, "📋 MTU capabilities received");
+            // Procesar información de capacidades MTU del servidor
+            return;
+        }
+    }
+    
+    // Si esperamos datos grandes, acumular en buffer
+    if (expectingLargeData_) {
+        if (rxBufferPos_ + length < sizeof(rxBuffer_)) {
+            memcpy(rxBuffer_ + rxBufferPos_, data, length);
+            rxBufferPos_ += length;
+            ESP_LOGD(TAG, "📥 Accumulated chunk (%d bytes, total: %d)", length, rxBufferPos_);
+        } else {
+            ESP_LOGW(TAG, "RX buffer overflow, discarding data");
+        }
+        return;
+    }
+    
+    // Datos normales (no fragmentados)
+    memcpy(lastData_.customData, data, 
+           length < BLE_MAX_CUSTOM_DATA_LEN ? length : BLE_MAX_CUSTOM_DATA_LEN - 1);
+    lastData_.customData[length] = '\0';
+    lastData_.timeStamp = bleGetTimestamp();
+    lastData_.valid = true;
+    
+    ESP_LOGI(TAG, "📨 Data received (%d bytes): %s", length, lastData_.customData);
+    
+    if (dataReceivedCB_ != nullptr) {
+        dataReceivedCB_(&lastData_);
+    }
+}
+
+uint16_t BLEClient::getNegotiatedMTU() const {
+    return negotiatedMTU_;
+}
+
+bool BLEClient::isMTUExchangeCompleted() const {
+    return mtuExchangeCompleted_;
 }

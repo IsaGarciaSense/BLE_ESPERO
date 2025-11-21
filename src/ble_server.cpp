@@ -1342,14 +1342,19 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
             break;
          
         case ESP_GATTS_MTU_EVT:
+        {
             ESP_LOGI(TAG, " MTU exchange completed: conn_id=%d, MTU=%d", 
                     param->mtu.conn_id, param->mtu.mtu);
             
             // Actualizar MTU en la sesión del cliente si es necesario
             instance_->setClientMTU(param->mtu.conn_id, param->mtu.mtu);
 
-            instance_->sendMTUCapabilitiesInfo(param->mtu.conn_id, param->mtu.mtu);
+            esp_err_t cap_ret = instance_->sendMTUCapabilitiesInfo(param->mtu.conn_id, param->mtu.mtu);
+            if (cap_ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to send MTU capabilities: %s", esp_err_to_name(cap_ret));
+            }
             break;
+        }
             
         case ESP_GATTS_CREATE_EVT:
             ESP_LOGI(TAG, "Service created: service_handle=%d", param->create.service_handle);
@@ -1425,6 +1430,8 @@ void BLEServer::gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if
                     ESP_LOGE(TAG, "Failed to send MTU request to client %d: %s", 
                             param->connect.conn_id, esp_err_to_name(mtu_ret));
                     instance_->setClientMTU(param->connect.conn_id, BLE_DEFAULT_MTU_SIZE);
+                }else{
+                    ESP_LOGI(TAG, "MTU negotiation request sent succesfuly");
                 }
 
 

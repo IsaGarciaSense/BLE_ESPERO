@@ -103,7 +103,7 @@ extern "C" void app_main() {
         server_config.clientTimeout = 60000;     // 60 segundos timeout en lugar de 0
         server_config.maxClients = 4;
         server_config.enableNotifications = true;
-        server_config.autoStartAdvertising = false;
+        server_config.autoStartAdvertising = true;
         server_config.enableJsonCommands = true;
         strncpy(server_config.deviceName, "HiveSense", BLE_MAX_DEVICE_NAME_LEN - 1);
 
@@ -203,7 +203,7 @@ extern "C" void app_main() {
                 ESP_LOGI(TAG, "    Advertising: %s", status.advertisingActive ? " ACTIVE" : " INACTIVE");
                 ESP_LOGI(TAG, "   Total connections: %lu", stats.totalConnections);
                 ESP_LOGI(TAG, "   Data sent: %lu | Data received: %lu", stats.dataSent, stats.dataReceived);
-                ESP_LOGI(TAG, "   Uptime: %llu seconds", ble->getUptime()/1000000);
+                ESP_LOGI(TAG, "   Uptime: %llu seconds", ble->getUptime()/1000);
                 ESP_LOGI(TAG, "   Free memory: %lu bytes", esp_get_free_heap_size());
                 ESP_LOGI(TAG, "===============================================");
                 
