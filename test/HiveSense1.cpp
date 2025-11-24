@@ -8,56 +8,43 @@
  *******************************************************************************/
 
 #include "ble_sense.hpp"
-#include "wifi_sense.hpp"
-#include "ble_server.hpp"
-// #include "device_configurator.hpp"
-#include "HiveConfig.hpp"
+#include "Agritech_Hive_Configs.hpp"
 #include "aws_sense.hpp"
+#include "sd_storage_sense.hpp"
+#include "spi_gp_sense.hpp"
 
 #include "esp_log.h"
 #include <inttypes.h>
 
 #include "nvs_flash.h"
 
+static const char* TAG = "BLE_SERVER_EXAMPLE";
+
 WifiHandler* wifiHandler = nullptr;
 awsHandler* awsHelper = nullptr;
 
-
+SD* sdCard = nullptr;              // ← AÑADIR
+std::string fileName = "testHive.txt";  // ← AÑADIR
 
 extern "C" void app_main() {
-    ESP_LOGI(TAG, "=== HIVE FIRST STEPS ===");
+    ESP_LOGI(TAG, "=== BLE SERVER ===");
 
-    esp_err_t mtu_ret = esp_ble_gatt_set_local_mtu(512);
-    if (mtu_ret == ESP_OK) {
-        ESP_LOGI(TAG, " Server local MTU set to 512 bytes");
-    } else {
-        ESP_LOGW(TAG, "Failed to set local MTU: %s", esp_err_to_name(mtu_ret));
-    }
-
+    // Create and initialize the WifiHandler object.
     wifiHandler = new WifiHandler(userSSID, userPassword);
-
     if (wifiHandler->connectWifi() != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to connect to WiFi.");
+        ESP_LOGE(TAG, "Failed to connect to Wi-Fi.");
         return;
     }
-
-    ESP_LOGI(TAG, "Connected to WiFi!");
+    ESP_LOGI(TAG, "Connected to Wi-Fi!");
+    vTaskDelay(pdMS_TO_TICKS(1000));  // Small delay after connecting
+    
+    // awsHandler awsHelper(wifiHandler);
     awsHelper = new awsHandler(*wifiHandler);
 
     if (awsHelper->init(AWS_IOT_ENDPOINT, THINGNAME, AWS_ServerCA, AWS_ClientCertificate, AWS_ClientKey) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize AWS helper");
         return;
     }
-    
-    // Inicializar NVS
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGI(TAG, "NVS flash erased");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-    ESP_LOGI(TAG, "NVS init corretly");
 
     SPI spiMaster(SPI::SpiMode::kMaster,SPI2_HOST, kMosiPin,kMisoPin,kSclPin);
     esp_err_t err = spiMaster.init();
@@ -94,6 +81,16 @@ extern "C" void app_main() {
         printf("File created at: %s\n", sdCard->getCurrentDir().c_str());
     }
 
+    // Inicializar NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGI(TAG, "NVS flash erased");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "NVS init corretly");
+
     // Mostrar datos de la librería
     BLELibrary::printLibraryInfo();
 
@@ -106,7 +103,7 @@ extern "C" void app_main() {
     }
     
     // Personalizar configuración
-    strncpy(config.deviceName, "HiveSense", BLE_MAX_DEVICE_NAME_LEN - 1);
+    strncpy(config.deviceName, "SenseAI_BLE", BLE_MAX_DEVICE_NAME_LEN - 1);
     config.autoStart = false; // Controlaremos manualmente
     config.enableLogging = true;
     config.logLevel = ESP_LOG_INFO;
@@ -127,22 +124,14 @@ extern "C" void app_main() {
     BLEServer* server = ble->getServer();
     if (server != nullptr) {
         ESP_LOGI(TAG, "Settings server");
-
-        esp_err_t name_ret = server->setDeviceName("HiveSense");
-        if (name_ret == ESP_OK) {
-            ESP_LOGI(TAG, "Device name successfully set to HiveSense");
-        } else {
-            ESP_LOGW(TAG, "Failed to set device name: %s", esp_err_to_name(name_ret));
-        }
         
         bleServerConfig_t server_config = server->getConfig();
         server_config.dataUpdateInterval = 0;    
         server_config.clientTimeout = 60000;     // 60 segundos timeout en lugar de 0
         server_config.maxClients = 4;
         server_config.enableNotifications = true;
-        server_config.autoStartAdvertising = true;
+        server_config.autoStartAdvertising = false;
         server_config.enableJsonCommands = true;
-        strncpy(server_config.deviceName, "HiveSense", BLE_MAX_DEVICE_NAME_LEN - 1);
 
         ret = server->setConfig(server_config);
         if (ret != ESP_OK) {
@@ -174,10 +163,7 @@ extern "C" void app_main() {
             // Echo de vuelta los datos recibidos para testing
             if (length > 0) {
                 char response[128];
-                char dataStr[length + 1];
-                memcpy(dataStr, data, length);
-                dataStr[length] = '\0';
-                snprintf(response, sizeof(response), "%s", dataStr);
+                snprintf(response, sizeof(response), "Server received: %.*s", length, data);
 
                 FRESULT error = sdCard->openFile(fileName, SD::OpenMode::kOpenAppend);
                 if (error) {
@@ -228,7 +214,6 @@ extern "C" void app_main() {
             }
         });
 
-
         // Manual Advertising
         ESP_LOGI(TAG, "Init advertising...");
         ret = server->startAdvertising();
@@ -276,14 +261,14 @@ extern "C" void app_main() {
                 ESP_LOGI(TAG, "    Advertising: %s", status.advertisingActive ? " ACTIVE" : " INACTIVE");
                 ESP_LOGI(TAG, "   Total connections: %lu", stats.totalConnections);
                 ESP_LOGI(TAG, "   Data sent: %lu | Data received: %lu", stats.dataSent, stats.dataReceived);
-                ESP_LOGI(TAG, "   Uptime: %llu seconds", ble->getUptime()/1000);
+                ESP_LOGI(TAG, "   Uptime: %llu seconds", ble->getUptime()/1000000);
                 ESP_LOGI(TAG, "   Free memory: %lu bytes", esp_get_free_heap_size());
                 ESP_LOGI(TAG, "===============================================");
                 
-                // REDUCIR EL TAMAÑO PARA EVITAR EL WARNING DE BLE
-                char status_data[20]; // 20 bytes máximo para BLE
-                snprintf(status_data, sizeof(status_data), "UP:%d C:%d", 
-                        (int)(ble->getUptime()/1000000), (int)status.connectedClients);
+                char status_data[64];
+                snprintf(status_data, sizeof(status_data), "Uptime:%llu Loop:%d Clients:%d ADV:%s", 
+                        ble->getUptime()/1000000, loopCount, (int)status.connectedClients,
+                        status.advertisingActive ? "ON" : "OFF");
                 server->setCustomData(status_data);
             }
             

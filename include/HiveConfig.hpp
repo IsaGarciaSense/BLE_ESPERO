@@ -1,3 +1,5 @@
+#include "sd_storage_sense.hpp"
+
 static const char* TAG = "HIVE_FIRST_STEPS";
 
 const char* userSSID = "SENSE DEV";
@@ -15,4 +17,12 @@ const char* mqttUpdateTopic = "ota/firmware";
 const char* mqttFeedbackTopic = "ota/feedback";
 const char* mqttDataTopic = "sense/dev/HIVE";
 const char* deviceID = "HIVE_TEST";
+
+SD* sdCard = nullptr;              
+std::string fileName = "testHive.txt";  
+
+constexpr gpio_num_t kCsPin = GPIO_NUM_39;
+constexpr gpio_num_t kSclPin = GPIO_NUM_12;
+constexpr gpio_num_t kMosiPin = GPIO_NUM_11;
+constexpr gpio_num_t kMisoPin = GPIO_NUM_13;
 
