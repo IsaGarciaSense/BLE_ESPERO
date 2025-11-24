@@ -18,11 +18,187 @@
 #include <inttypes.h>
 
 #include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include <time.h>
+#include <sys/time.h>
+#include "esp_sntp.h"
+
+// Estructura para pasar datos entre tareas
+struct DataMessage {
+    char data[256];
+    size_t length;
+    uint64_t timestamp;
+};
 
 WifiHandler* wifiHandler = nullptr;
 awsHandler* awsHelper = nullptr;
+BLEServer* globalServer = nullptr;
+QueueHandle_t dataQueue = nullptr;
 
+// Función para obtener el nombre del archivo basado en la fecha actual
+std::string getDateBasedFilename(const char* prefix) {
+    time_t now;
+    struct tm timeinfo;
+    char buffer[64];
+    
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    
+    snprintf(buffer, sizeof(buffer), "%s_%04d-%02d-%02d.txt", 
+             prefix,
+             timeinfo.tm_year + 1900,
+             timeinfo.tm_mon + 1,
+             timeinfo.tm_mday);
+    
+    return std::string(buffer);
+}
 
+// Función auxiliar para escribir datos en SD
+bool writeToSD(const char* filename, const char* data) {
+    if (!sdCard) return false;
+    
+    FRESULT error = sdCard->openFile(filename, SD::OpenMode::kOpenAppend);
+    if (error) {
+        ESP_LOGE(TAG, "SD error at openFile: %s", sdCard->getFastFsErrName(error));
+        return false;
+    }
+    
+    error = sdCard->fileWrite(data);
+    if (error) {
+        ESP_LOGE(TAG, "SD error at fileWrite: %s", sdCard->getFastFsErrName(error));
+        sdCard->closeFile();
+        return false;
+    }
+    
+    sdCard->closeFile();
+    return true;
+}
+
+// Tarea WiFi/AWS - maneja conexión y envío de datos
+void wifiAwsTask(void* pvParameters) {
+    ESP_LOGI(TAG, "WiFi/AWS Task started");
+    
+    DataMessage msg;
+    char timestampedData[512];
+    
+    while (true) {
+        // Esperar por datos en la cola
+        if (xQueueReceive(dataQueue, &msg, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "Processing: %.*s", msg.length, msg.data);
+            
+            // Primero guardar TODOS los datos en SD (archivo diario)
+            std::string dailyFilename = getDateBasedFilename("data");
+            FRESULT error = sdCard->createFile(dailyFilename);
+            if (error && error != FR_EXIST) {
+                ESP_LOGE(TAG, "Error creating daily file: %s", sdCard->getFastFsErrName(error));
+            }
+            
+            snprintf(timestampedData, sizeof(timestampedData), "[%llu] %s\n", msg.timestamp, msg.data);
+            
+            if (writeToSD(dailyFilename.c_str(), timestampedData)) {
+                ESP_LOGI(TAG, "Saved to: %s", dailyFilename.c_str());
+            } else {
+                ESP_LOGE(TAG, "Failed to save to SD");
+            }
+            
+            // Intentar conectar a AWS y enviar
+            bool mqttSuccess = false;
+            
+            if (awsHelper->connect() == ESP_OK) {
+                if (awsHelper->publish(mqttDataTopic, msg.data) == ESP_OK) {
+                    ESP_LOGI(TAG, "Published to AWS");
+                    mqttSuccess = true;
+                } else {
+                    ESP_LOGE(TAG, "Failed to publish to AWS");
+                }
+                awsHelper->disconnect();
+            } else {
+                ESP_LOGE(TAG, "Failed to connect to AWS");
+            }
+            
+            // Si falló el envío MQTT, guardar en archivo de fallidos
+            if (!mqttSuccess) {
+                std::string failedFilename = getDateBasedFilename("failed");
+                error = sdCard->createFile(failedFilename);
+                if (error && error != FR_EXIST) {
+                    ESP_LOGE(TAG, "Error creating failed file");
+                }
+                
+                if (writeToSD(failedFilename.c_str(), timestampedData)) {
+                    ESP_LOGI(TAG, "Saved to failed: %s", failedFilename.c_str());
+                }
+            }
+            
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+    }
+}
+
+// Tarea BLE - maneja el servidor BLE y advertising
+void bleTask(void* pvParameters) {
+    ESP_LOGI(TAG, "BLE Task started");
+    
+    BLELibrary* ble = (BLELibrary*)pvParameters;
+    
+    if (!globalServer) {
+        ESP_LOGE(TAG, "Global server is NULL");
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    int loopCount = 0;
+    int lastConnectedClients = 0;
+    
+    while (true) {
+        loopCount++;
+
+        // Check for connection changes every loop
+        bleServerStatus_t status = globalServer->getStatus();
+        if ((int)status.connectedClients != lastConnectedClients) {
+            ESP_LOGI(TAG, " Connection count changed: %d -> %d", 
+                    lastConnectedClients, (int)status.connectedClients);
+            lastConnectedClients = (int)status.connectedClients;
+        }
+        
+        // Verificar y forzar advertising si no está activo y no hay clientes máximos
+        if (!status.advertisingActive && status.connectedClients < 4) {
+            ESP_LOGW(TAG, "  Advertising not active with %d clients - forcing restart...", 
+                    (int)status.connectedClients);
+            esp_err_t ret = globalServer->startAdvertising();
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, " Advertising restarted successfully");
+            } else {
+                ESP_LOGE(TAG, " Failed to restart advertising: %s", esp_err_to_name(ret));
+            }
+        }
+
+        if (loopCount % 30 == 0) {
+            bleServerStats_t stats = globalServer->getStats();
+            
+            ESP_LOGI(TAG, "===============================================");
+            ESP_LOGI(TAG, " SERVER STATUS REPORT - Loop %d", loopCount);
+            ESP_LOGI(TAG, "===============================================");
+            ESP_LOGI(TAG, "   State: %s", globalServer->kgetStateString());
+            ESP_LOGI(TAG, "   Clients connected: %d/%d", (int)status.connectedClients, 4);
+            ESP_LOGI(TAG, "    Advertising: %s", status.advertisingActive ? " ACTIVE" : " INACTIVE");
+            ESP_LOGI(TAG, "   Total connections: %lu", stats.totalConnections);
+            ESP_LOGI(TAG, "   Data sent: %lu | Data received: %lu", stats.dataSent, stats.dataReceived);
+            ESP_LOGI(TAG, "   Uptime: %llu seconds", ble->getUptime()/1000);
+            ESP_LOGI(TAG, "   Free memory: %lu bytes", esp_get_free_heap_size());
+            ESP_LOGI(TAG, "===============================================");
+            
+            // REDUCIR EL TAMAÑO PARA EVITAR EL WARNING DE BLE
+            char status_data[20]; // 20 bytes máximo para BLE
+            snprintf(status_data, sizeof(status_data), "UP:%d C:%d", 
+                    (int)(ble->getUptime()/1000000), (int)status.connectedClients);
+            globalServer->setCustomData(status_data);
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
 
 extern "C" void app_main() {
     ESP_LOGI(TAG, "=== HIVE FIRST STEPS ===");
@@ -42,6 +218,35 @@ extern "C" void app_main() {
     }
 
     ESP_LOGI(TAG, "Connected to WiFi!");
+    
+    // Configurar SNTP para sincronización de tiempo
+    ESP_LOGI(TAG, "Initializing SNTP...");
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_init();
+    
+    // Esperar a que el tiempo se sincronice
+    int retry = 0;
+    const int retry_count = 10;
+    
+    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
+        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+    
+    time_t now;
+    time(&now);
+    struct tm *timeinfo_ptr = localtime(&now);
+    struct tm timeinfo = *timeinfo_ptr;
+    
+    if (timeinfo.tm_year > (2023 - 1900)) {
+        ESP_LOGI(TAG, "Time synchronized: %04d-%02d-%02d %02d:%02d:%02d",
+                 timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    } else {
+        ESP_LOGW(TAG, "Time not synchronized, using default time");
+    }
+    
     awsHelper = new awsHandler(*wifiHandler);
 
     if (awsHelper->init(AWS_IOT_ENDPOINT, THINGNAME, AWS_ServerCA, AWS_ClientCertificate, AWS_ClientKey) != ESP_OK) {
@@ -170,61 +375,23 @@ extern "C" void app_main() {
         });
 
         server->setDataWrittenCallback([](uint16_t connID, const uint8_t* data, uint16_t length) {
-            ESP_LOGI(TAG, " Client %d data received: %.*s", connID, length, data);
-            // Echo de vuelta los datos recibidos para testing
-            if (length > 0) {
-                char response[128];
-                char dataStr[length + 1];
-                memcpy(dataStr, data, length);
-                dataStr[length] = '\0';
-                snprintf(response, sizeof(response), "%s", dataStr);
-
-                FRESULT error = sdCard->openFile(fileName, SD::OpenMode::kOpenAppend);
-                if (error) {
-                    printf("SD error at openFile: %s\n", sdCard->getFastFsErrName(error));
-                } else {
-                    printf("File successfully opened at - %s\n",
-                        sdCard->getCurrentDir().c_str());
-                    printf("Trying to write: 'Life is more like fight than dance!'\n");
-
-                    error = sdCard->fileWrite(response);
-                    if (error) {
-                        printf("SD error at fileWrite: %s\n",
-                            sdCard->getFastFsErrName(error));
-                    }
-
-                    sdCard->closeFile();
-                    if (error) {
-                        printf("SD error at createFile: %s\n",
-                            sdCard->getFastFsErrName(error));
-                    }
-                    printf("Writting process done!\n");
-                }
-
-                // sdCard.unmountCard();
-                // if (error) {
-                //     printf("SD error at unmountCard: %s\n", sdCard.getFastFsErrName(error));
-                // } else {
-                //     printf("Card successfully unmounted\n");
-                // }
-
-                if (awsHelper->connect() != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to connect to AWS IoT Core");
-                    return;
-                }
-
-                // Publish the current time to an AWS IoT Core topic (change the topic as needed).
-                if (awsHelper->publish(mqttDataTopic, response) != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to publish data to AWS");
-                } else {
-                    ESP_LOGI(TAG, "Data published to AWS successfully");
-                }
-
-                // Disconnect from AWS IoT Core.
-                awsHelper->disconnect();
+            ESP_LOGI(TAG, " Client %d data received (%d bytes)", connID, length);
+            
+            if (length > 0 && length < 256) {
+                // Solo preparar el mensaje y enviarlo a la cola
+                // La escritura en SD se hace en la tarea WiFi/AWS para no bloquear el callback
+                DataMessage msg;
+                memcpy(msg.data, data, length);
+                msg.data[length] = '\0';
+                msg.length = length;
                 
-                vTaskDelay(pdMS_TO_TICKS(60000));  // Wait 60 seconds before the next publish
-
+                struct timeval tv;
+                gettimeofday(&tv, NULL);
+                msg.timestamp = (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
+                
+                if (xQueueSend(dataQueue, &msg, 0) != pdTRUE) {
+                    ESP_LOGW(TAG, "Queue full, data dropped");
+                }
             }
         });
 
@@ -238,62 +405,61 @@ extern "C" void app_main() {
             return;
         }
         
-        ESP_LOGI(TAG, "loop basic");
+        // Guardar referencia global al servidor
+        globalServer = server;
         
-        int loopCount = 0;
-        int lastConnectedClients = 0;
-        while (true) {
-            loopCount++;
-
-            // Check for connection changes every loop
-            bleServerStatus_t status = server->getStatus();
-            if ((int)status.connectedClients != lastConnectedClients) {
-                ESP_LOGI(TAG, " Connection count changed: %d -> %d", 
-                        lastConnectedClients, (int)status.connectedClients);
-                lastConnectedClients = (int)status.connectedClients;
-            }
-            
-            // Verificar y forzar advertising si no está activo y no hay clientes máximos
-            if (!status.advertisingActive && status.connectedClients < 4) {
-                ESP_LOGW(TAG, "  Advertising not active with %d clients - forcing restart...", 
-                        (int)status.connectedClients);
-                esp_err_t ret = server->startAdvertising();
-                if (ret == ESP_OK) {
-                    ESP_LOGI(TAG, " Advertising restarted successfully");
-                } else {
-                    ESP_LOGE(TAG, " Failed to restart advertising: %s", esp_err_to_name(ret));
-                }
-            }
-
-            if (loopCount % 30 == 0) {
-                bleServerStats_t stats = server->getStats();
-                
-                ESP_LOGI(TAG, "===============================================");
-                ESP_LOGI(TAG, " SERVER STATUS REPORT - Loop %d", loopCount);
-                ESP_LOGI(TAG, "===============================================");
-                ESP_LOGI(TAG, "   State: %s", server->kgetStateString());
-                ESP_LOGI(TAG, "   Clients connected: %d/%d", (int)status.connectedClients, 4);
-                ESP_LOGI(TAG, "    Advertising: %s", status.advertisingActive ? " ACTIVE" : " INACTIVE");
-                ESP_LOGI(TAG, "   Total connections: %lu", stats.totalConnections);
-                ESP_LOGI(TAG, "   Data sent: %lu | Data received: %lu", stats.dataSent, stats.dataReceived);
-                ESP_LOGI(TAG, "   Uptime: %llu seconds", ble->getUptime()/1000);
-                ESP_LOGI(TAG, "   Free memory: %lu bytes", esp_get_free_heap_size());
-                ESP_LOGI(TAG, "===============================================");
-                
-                // REDUCIR EL TAMAÑO PARA EVITAR EL WARNING DE BLE
-                char status_data[20]; // 20 bytes máximo para BLE
-                snprintf(status_data, sizeof(status_data), "UP:%d C:%d", 
-                        (int)(ble->getUptime()/1000000), (int)status.connectedClients);
-                server->setCustomData(status_data);
-            }
-            
-            vTaskDelay(pdMS_TO_TICKS(1000));
+        // Crear cola para comunicación entre tareas
+        dataQueue = xQueueCreate(20, sizeof(DataMessage));
+        if (dataQueue == NULL) {
+            ESP_LOGE(TAG, "Failed to create data queue");
+            delete ble;
+            return;
         }
+        ESP_LOGI(TAG, "Data queue created successfully");
+        
+        // Crear tarea WiFi/AWS con más stack
+        BaseType_t wifiTaskCreated = xTaskCreatePinnedToCore(
+            wifiAwsTask,
+            "WiFi_AWS_Task",
+            12288,  // 12KB de stack
+            NULL,
+            5,
+            NULL,
+            1  // Core 1
+        );
+        
+        if (wifiTaskCreated != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create WiFi/AWS task");
+            delete ble;
+            return;
+        }
+        ESP_LOGI(TAG, "WiFi/AWS task created on core 1");
+        
+        // Crear tarea BLE con más stack
+        BaseType_t bleTaskCreated = xTaskCreatePinnedToCore(
+            bleTask,
+            "BLE_Task",
+            6144,  // 6KB de stack
+            (void*)ble,
+            4,
+            NULL,
+            0  // Core 0
+        );
+        
+        if (bleTaskCreated != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create BLE task");
+            delete ble;
+            return;
+        }
+        ESP_LOGI(TAG, "BLE task created on core 0");
+        
+        ESP_LOGI(TAG, "=== System running with separate tasks ===");
+        ESP_LOGI(TAG, "BLE Task: Handling connections and data reception");
+        ESP_LOGI(TAG, "WiFi/AWS Task: Publishing data to MQTT and saving failed attempts");
         
     } else {
         ESP_LOGE(TAG, "Get server not found");
         delete ble;
         return;
     }
-    delete ble;
 }
