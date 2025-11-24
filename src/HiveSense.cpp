@@ -13,6 +13,7 @@
 // #include "device_configurator.hpp"
 #include "HiveConfig.hpp"
 #include "aws_sense.hpp"
+#include "actuators_sense.hpp"
 
 #include "esp_log.h"
 #include <inttypes.h>
@@ -36,6 +37,7 @@ WifiHandler* wifiHandler = nullptr;
 awsHandler* awsHelper = nullptr;
 BLEServer* globalServer = nullptr;
 QueueHandle_t dataQueue = nullptr;
+RGB* brainLED = nullptr;
 
 // Función para obtener el nombre del archivo basado en la fecha actual
 std::string getDateBasedFilename(const char* prefix) {
@@ -94,7 +96,7 @@ void wifiAwsTask(void* pvParameters) {
             if (error && error != FR_EXIST) {
                 ESP_LOGE(TAG, "Error creating daily file: %s", sdCard->getFastFsErrName(error));
             }
-            
+            //TODO: Corregir el timeStamp que se está creando
             snprintf(timestampedData, sizeof(timestampedData), "[%llu] %s\n", msg.timestamp, msg.data);
             
             if (writeToSD(dailyFilename.c_str(), timestampedData)) {
@@ -201,6 +203,15 @@ void bleTask(void* pvParameters) {
 }
 
 extern "C" void app_main() {
+
+    brainLED = new RGB(255, 255, 255);
+    esp_err_t err = brainLED->init();
+    if (err) {
+        printf("LED couldn't be initialized.\n");
+        printf("%s\n", esp_err_to_name(err));
+        // while(1);
+    }
+
     ESP_LOGI(TAG, "=== HIVE FIRST STEPS ===");
 
     esp_err_t mtu_ret = esp_ble_gatt_set_local_mtu(512);
@@ -265,7 +276,7 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "NVS init corretly");
 
     SPI spiMaster(SPI::SpiMode::kMaster,SPI2_HOST, kMosiPin,kMisoPin,kSclPin);
-    esp_err_t err = spiMaster.init();
+    err = spiMaster.init();
     if (err) {
         printf("SPI error while init: %s\n", esp_err_to_name(err));
     }
@@ -380,6 +391,11 @@ extern "C" void app_main() {
             if (length > 0 && length < 256) {
                 // Solo preparar el mensaje y enviarlo a la cola
                 // La escritura en SD se hace en la tarea WiFi/AWS para no bloquear el callback
+                if(brainLED != nullptr){
+                    brainLED->setColor(0, 255, 0); // Verde al recibir datos
+                    brainLED->pulse(200); // Pulso breve
+                }
+                // vTaskDelay(pdMS_TO_TICKS(100));
                 DataMessage msg;
                 memcpy(msg.data, data, length);
                 msg.data[length] = '\0';
