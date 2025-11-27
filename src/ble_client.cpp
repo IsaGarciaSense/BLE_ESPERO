@@ -245,6 +245,16 @@ esp_err_t BLEClient::connect(const esp_bd_addr_t serverMACadd) {
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (state_== BLE_CLIENT_SCANNING) {
+        ESP_LOGW(TAG, "Stopping scanning before connection");
+        esp_err_t stopResult = esp_ble_gap_stop_scanning();
+        if (stopResult != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to stop scanning: %s", esp_err_to_name(stopResult));
+            return stopResult;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
     char MACaddStr[18];
     bleMacaddToString((uint8_t*)serverMACadd, MACaddStr);
     ESP_LOGI(TAG, "Connecting to server: %s", MACaddStr);
@@ -400,7 +410,7 @@ esp_err_t BLEClient::writeCustomData(const char* data) {
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Execute write failed: %s", esp_err_to_name(ret));
         } else {
-            ESP_LOGI(TAG, "✅ Large data written successfully (%zu bytes in %zu chunks)", 
+            ESP_LOGI(TAG, " Large data written successfully (%zu bytes in %zu chunks)", 
                      dataLen, chunksSent);
             stats_.dataSent++;
         }
@@ -1025,12 +1035,19 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
             }
             
             // Funcionalidad original: manejar dispositivo objetivo
-            if (isTarget) {
+            if (isTarget && !discoveryMode_) {
                 char macStr[18];
                 bleMacaddToString(scanResult->scan_rst.bda, macStr);
 
                 ESP_LOGI(TAG, "Target device found: %s, RSSI: %d dBm",
                         macStr, scanResult->scan_rst.rssi);
+
+                esp_err_t stopResult = esp_ble_gap_stop_scanning();
+                if (stopResult != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to stop scanning: %s", esp_err_to_name(stopResult));
+                }
+
+                vTaskDelay(pdMS_TO_TICKS(100));
 
                 // Actualizar información del dispositivo conectado
                 memcpy(&connectedDevice_, &currentDevice, sizeof(bleDeviceInfo_t));
@@ -1042,10 +1059,12 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
                 }
                 
                 // Solo conectar si no estamos en modo discovery y se debe conectar
-                if (!discoveryMode_ && shouldConnect) {
-                    esp_ble_gap_stop_scanning();
+                if (shouldConnect) {
+                    ESP_LOGI(TAG, "Connecting to target device: %s", macStr);
                     connect(scanResult->scan_rst.bda);
                 }
+
+                return;
             }
             break;
         }
@@ -1372,13 +1391,13 @@ void BLEClient::handleIncomingData(const uint8_t* data, uint16_t length) {
         
         // Verificar si es JSON de control
         if (strstr(tempBuffer, "large_data_incoming") != nullptr) {
-            ESP_LOGI(TAG, "📥 Large data incoming notification received");
+            ESP_LOGI(TAG, " Large data incoming notification received");
             expectingLargeData_ = true;
             rxBufferPos_ = 0;
             memset(rxBuffer_, 0, sizeof(rxBuffer_));
             return;
         } else if (strstr(tempBuffer, "transfer_complete") != nullptr) {
-            ESP_LOGI(TAG, "✅ Transfer complete notification received");
+            ESP_LOGI(TAG, " Transfer complete notification received");
             
             if (rxBufferPos_ > 0) {
                 rxBuffer_[rxBufferPos_] = '\0';
@@ -1390,7 +1409,7 @@ void BLEClient::handleIncomingData(const uint8_t* data, uint16_t length) {
                 lastData_.timeStamp = bleGetTimestamp();
                 lastData_.valid = true;
                 
-                ESP_LOGI(TAG, "📦 Large data assembled (%d bytes): %.*s", 
+                ESP_LOGI(TAG, " Large data assembled (%d bytes): %.*s", 
                          rxBufferPos_, (rxBufferPos_ > 50 ? 50 : rxBufferPos_), rxBuffer_);
                 
                 if (dataReceivedCB_ != nullptr) {
@@ -1402,7 +1421,7 @@ void BLEClient::handleIncomingData(const uint8_t* data, uint16_t length) {
             rxBufferPos_ = 0;
             return;
         } else if (strstr(tempBuffer, "mtu_capabilities") != nullptr) {
-            ESP_LOGI(TAG, "📋 MTU capabilities received");
+            ESP_LOGI(TAG, " MTU capabilities received");
             // Procesar información de capacidades MTU del servidor
             return;
         }
@@ -1413,7 +1432,7 @@ void BLEClient::handleIncomingData(const uint8_t* data, uint16_t length) {
         if (rxBufferPos_ + length < sizeof(rxBuffer_)) {
             memcpy(rxBuffer_ + rxBufferPos_, data, length);
             rxBufferPos_ += length;
-            ESP_LOGD(TAG, "📥 Accumulated chunk (%d bytes, total: %d)", length, rxBufferPos_);
+            ESP_LOGD(TAG, " Accumulated chunk (%d bytes, total: %d)", length, rxBufferPos_);
         } else {
             ESP_LOGW(TAG, "RX buffer overflow, discarding data");
         }
@@ -1427,7 +1446,7 @@ void BLEClient::handleIncomingData(const uint8_t* data, uint16_t length) {
     lastData_.timeStamp = bleGetTimestamp();
     lastData_.valid = true;
     
-    ESP_LOGI(TAG, "📨 Data received (%d bytes): %s", length, lastData_.customData);
+    ESP_LOGI(TAG, " Data received (%d bytes): %s", length, lastData_.customData);
     
     if (dataReceivedCB_ != nullptr) {
         dataReceivedCB_(&lastData_);
