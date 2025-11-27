@@ -283,6 +283,7 @@ extern "C" void app_main() {
 
     sdCard = new SD(spiMaster, kCsPin);  
     err = sdCard->init();
+    //TODO: Hacer task para la sd, si sale algún error que la reinicio o algo así
 
     if (err) {
         printf("SD error while init: %s\n", esp_err_to_name(err));
