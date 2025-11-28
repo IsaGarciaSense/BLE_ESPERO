@@ -19,10 +19,18 @@ const char* mqttDataTopic = "sense/dev/HIVE";
 const char* deviceID = "HIVE_TEST";
 
 SD* sdCard = nullptr;              
-std::string fileName = "testHive.txt";  
+// std::string fileName = "testHive.txt";
+std::string dailyFilename;  
+std::string failedFilename;
 
+// GPIO configuration for SPI
+// constexpr gpio_num_t kCsPin = GPIO_NUM_39;
+// constexpr gpio_num_t kSclPin = GPIO_NUM_36;
+// constexpr gpio_num_t kMosiPin = GPIO_NUM_35;
+// constexpr gpio_num_t kMisoPin = GPIO_NUM_37;
+//BRAIN ZHANA
 constexpr gpio_num_t kCsPin = GPIO_NUM_39;
-constexpr gpio_num_t kSclPin = GPIO_NUM_36;
-constexpr gpio_num_t kMosiPin = GPIO_NUM_35;
-constexpr gpio_num_t kMisoPin = GPIO_NUM_37;
+constexpr gpio_num_t kSclPin = GPIO_NUM_12;
+constexpr gpio_num_t kMosiPin = GPIO_NUM_11;
+constexpr gpio_num_t kMisoPin = GPIO_NUM_13;
 
