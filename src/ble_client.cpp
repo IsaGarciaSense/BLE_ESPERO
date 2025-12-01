@@ -933,24 +933,13 @@ bool BLEClient::verifyTargetDevice(esp_ble_gap_cb_param_t *scanResult) {
 
     bool finalResult = deviceMatch && securityOk;
 
-    // Debug logging simplificado - ONLY MAC
-    char foundMac[18], targetMac[18];
-    bleMacaddToString(scanResult->scan_rst.bda, foundMac);
-    bleMacaddToString((uint8_t*)config_.targetServerMACadd, targetMac);
-
-    ESP_LOGI(TAG, "=== MAC-Based Device Verification ===");
-    ESP_LOGI(TAG, "Found MAC: %s", foundMac);
-    ESP_LOGI(TAG, "Target MAC: %s", targetMac);
-    ESP_LOGI(TAG, "RSSI: %d dBm", scanResult->scan_rst.rssi);
-    ESP_LOGI(TAG, "Security Configuration:");
-    ESP_LOGI(TAG, "  Level: %d", securityConfig_.level);
-    ESP_LOGI(TAG, "  Use Custom UUIDs: %s", securityConfig_.useCustomUUIDS ? "YES" : "NO");
-    ESP_LOGI(TAG, "  Has Target Service: %s", hasTargetService ? "YES" : "NO");
-    ESP_LOGI(TAG, "Verification Results:");
-    ESP_LOGI(TAG, "  MAC match: %s", macMatch ? "YES" : "NO");
-    ESP_LOGI(TAG, "  Security OK: %s", securityOk ? "YES" : "NO");
-    ESP_LOGI(TAG, "  FINAL RESULT: %s", finalResult ? "TARGET VERIFIED" : "NOT TARGET");
-    ESP_LOGI(TAG, "====================================");
+    // Solo mostrar logs detallados cuando encontramos el target
+    if (finalResult) {
+        char foundMac[18];
+        bleMacaddToString(scanResult->scan_rst.bda, foundMac);
+        ESP_LOGI(TAG, "*** TARGET DEVICE VERIFIED ***");
+        ESP_LOGI(TAG, "  MAC: %s, RSSI: %d dBm", foundMac, scanResult->scan_rst.rssi);
+    }
 
     return finalResult;
 }
@@ -983,6 +972,9 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
 
     switch (scanResult->scan_rst.search_evt) {
         case ESP_GAP_SEARCH_INQ_RES_EVT: {
+            // Ceder tiempo al sistema para evitar watchdog
+            taskYIELD();
+            
             bleDeviceInfo_t currentDevice;
             memset(&currentDevice, 0, sizeof(currentDevice));
             
@@ -1002,7 +994,7 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
                     uint8_t type = advData[i + 1];
 
                     // Buscar nombre del dispositivo
-                    if (type == 0x09 || type == 0x08) {  // Complete o shortened local name                     REVISAR!!!
+                    if (type == 0x09 || type == 0x08) {  // Complete o shortened local name
                         uint8_t nameLen = length - 1;
                         if (nameLen > BLE_MAX_DEVICE_NAME_LEN - 1) {
                             nameLen = BLE_MAX_DEVICE_NAME_LEN - 1;
@@ -1016,26 +1008,40 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
                 }
             }
             
-            if (strlen(deviceName) == 0) {
-                snprintf(deviceName, sizeof(deviceName), "Unknown Device");
-            }
-
+            // No asignar "Unknown Device" - dejar vacío para filtrar
             strncpy(currentDevice.name, deviceName, BLE_MAX_DEVICE_NAME_LEN - 1);
 
-            // bool isNewDevice = addToFoundDevices(&currentDevice);
-
-            // Verificar si es el dispositivo objetivo
-            bool isTarget = verifyTargetDevice(scanResult);
-            if (isTarget) {
-                targetDeviceFoundInScan_ = true;
+            // Optimización: Solo verificar target si:
+            // 1. El dispositivo tiene un nombre Y coincide con el target, O
+            // 2. Tenemos una MAC específica configurada (no zeros)
+            bool shouldVerify = false;
+            uint8_t zeroMac[ESP_BD_ADDR_LEN] = {0};
+            bool hasMacTarget = (memcmp(config_.targetServerMACadd, zeroMac, ESP_BD_ADDR_LEN) != 0);
+            bool hasNameTarget = (strlen(config_.targetDeviceName) > 0);
+            
+            if (hasMacTarget) {
+                // Verificar si MAC coincide antes de hacer verificación completa
+                shouldVerify = (memcmp(scanResult->scan_rst.bda, config_.targetServerMACadd, ESP_BD_ADDR_LEN) == 0);
+            } else if (hasNameTarget && strlen(deviceName) > 0) {
+                // Solo verificar si el nombre coincide
+                shouldVerify = (strcmp(deviceName, config_.targetDeviceName) == 0);
+            }
+            
+            bool isTarget = false;
+            if (shouldVerify) {
+                isTarget = verifyTargetDevice(scanResult);
+                if (isTarget) {
+                    targetDeviceFoundInScan_ = true;
+                }
             }
 
-            if (anyDeviceFoundCB_ != nullptr) {
+            // Solo llamar callback si el dispositivo tiene nombre (filtrar "Unknown")
+            if (anyDeviceFoundCB_ != nullptr && strlen(deviceName) > 0) {
                 anyDeviceFoundCB_(&currentDevice, isTarget);
             }
             
-            // Funcionalidad original: manejar dispositivo objetivo
-            if (isTarget && !discoveryMode_) {
+            // Manejar dispositivo objetivo - conectar si es target (en cualquier modo)
+            if (isTarget) {
                 char macStr[18];
                 bleMacaddToString(scanResult->scan_rst.bda, macStr);
 
@@ -1058,7 +1064,7 @@ void BLEClient::handleScanResult(esp_ble_gap_cb_param_t *param) {
                     deviceFoundCB_(&connectedDevice_, &shouldConnect);
                 }
                 
-                // Solo conectar si no estamos en modo discovery y se debe conectar
+                // Conectar al dispositivo target
                 if (shouldConnect) {
                     ESP_LOGI(TAG, "Connecting to target device: %s", macStr);
                     connect(scanResult->scan_rst.bda);
@@ -1164,7 +1170,21 @@ void BLEClient::handleServiceFound(esp_ble_gattc_cb_param_t *param) {
     // Check if this is our target service
     bool serviceMatch = false;
 
-    if (securityConfig_.useCustomUUIDS && param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_128) {
+    if (securityConfig_.level == BLE_SECURITY_NONE && !securityConfig_.useCustomUUIDS) {
+        // En modo SECURITY_NONE sin UUIDs custom, aceptar el primer servicio que no sea genérico
+        // Evitar servicios genéricos de BLE (Generic Access 0x1800, Generic Attribute 0x1801)
+        if (param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_16) {
+            uint16_t uuid16 = param->search_res.srvc_id.uuid.uuid.uuid16;
+            if (uuid16 != 0x1800 && uuid16 != 0x1801) {
+                serviceMatch = true;
+                ESP_LOGI(TAG, "Accepting service UUID16: 0x%04X (SECURITY_NONE mode)", uuid16);
+            }
+        } else if (param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_128) {
+            // Aceptar servicios 128-bit en modo SECURITY_NONE
+            serviceMatch = true;
+            ESP_LOGI(TAG, "Accepting 128-bit service (SECURITY_NONE mode)");
+        }
+    } else if (securityConfig_.useCustomUUIDS && param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_128) {
         serviceMatch = bleCompareUUID128(param->search_res.srvc_id.uuid.uuid.uuid128, 
                                           securityConfig_.serviceUUID);
     } else if (!securityConfig_.useCustomUUIDS && param->search_res.srvc_id.uuid.len == ESP_UUID_LEN_16) {
@@ -1172,7 +1192,8 @@ void BLEClient::handleServiceFound(esp_ble_gattc_cb_param_t *param) {
     }
     
     if (serviceMatch) {
-        ESP_LOGI(TAG, "Target service found");
+        ESP_LOGI(TAG, "Target service found: handles %d-%d", 
+                param->search_res.start_handle, param->search_res.end_handle);
         serviceStartHandle_ = param->search_res.start_handle;
         serviceEndHandle_ = param->search_res.end_handle;
     }
@@ -1200,7 +1221,20 @@ void BLEClient::handleServiceDiscoveryComplete(esp_ble_gattc_cb_param_t *param) 
                 
                 bool isBattery = false;
                 bool isCustom = false;
-                if (securityConfig_.useCustomUUIDS && char_elem->uuid.len == ESP_UUID_LEN_128) {
+                
+                // En modo SECURITY_NONE, asignar la primera característica con propiedades de lectura/escritura
+                if (securityConfig_.level == BLE_SECURITY_NONE && !securityConfig_.useCustomUUIDS) {
+                    // Usar la primera característica legible como battery
+                    if (batteryCharHandle_ == BLE_INVALID_HANDLE && 
+                        (char_elem->properties & ESP_GATT_CHAR_PROP_BIT_READ)) {
+                        isBattery = true;
+                    }
+                    // Usar la primera característica escribible como custom
+                    else if (customCharHandle_ == BLE_INVALID_HANDLE && 
+                             (char_elem->properties & (ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_WRITE_NR))) {
+                        isCustom = true;
+                    }
+                } else if (securityConfig_.useCustomUUIDS && char_elem->uuid.len == ESP_UUID_LEN_128) {
                     isBattery = bleCompareUUID128(char_elem->uuid.uuid.uuid128, 
                                                    securityConfig_.batteryCharUUID);
                     isCustom = bleCompareUUID128(char_elem->uuid.uuid.uuid128, 
@@ -1212,10 +1246,10 @@ void BLEClient::handleServiceDiscoveryComplete(esp_ble_gattc_cb_param_t *param) 
                 
                 if (isBattery) {
                     batteryCharHandle_ = char_elem->char_handle;
-                    ESP_LOGI(TAG, "Battery characteristic found: handle=%d", batteryCharHandle_);
+                    ESP_LOGI(TAG, "Battery/Read characteristic found: handle=%d", batteryCharHandle_);
                 } else if (isCustom) {
                     customCharHandle_ = char_elem->char_handle;
-                    ESP_LOGI(TAG, "Custom characteristic found: handle=%d", customCharHandle_);
+                    ESP_LOGI(TAG, "Custom/Write characteristic found: handle=%d", customCharHandle_);
                 }
             }
             

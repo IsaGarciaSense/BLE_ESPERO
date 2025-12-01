@@ -20,7 +20,7 @@
 static const char* TAG = "BLE_NAME_TARGET";
 
 // Nombre del dispositivo target - ESTE ES EL PRINCIPAL
-const char* TARGET_DEVICE_NAME = "SenseAI_BLE";
+const char* TARGET_DEVICE_NAME = "HiveSense";
 
 /******************************************************************************/
 /*                         Global Variables                                   */
@@ -35,25 +35,21 @@ static BLEClient* g_client = nullptr; // Variable global para acceder desde call
 
 // Callback cuando se encuentra cualquier dispositivo
 void onAnyDeviceFound(const bleDeviceInfo_t* deviceInfo, bool isTarget) {
-    // Solo mostrar dispositivos con nombre conocido
-    if (strlen(deviceInfo->name) > 0) {
-        char macStr[18];
-        sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
-                deviceInfo->address[0], deviceInfo->address[1],
-                deviceInfo->address[2], deviceInfo->address[3],
-                deviceInfo->address[4], deviceInfo->address[5]);
+    // El callback ahora solo se llama para dispositivos con nombre real
+    char macStr[18];
+    sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+            deviceInfo->address[0], deviceInfo->address[1],
+            deviceInfo->address[2], deviceInfo->address[3],
+            deviceInfo->address[4], deviceInfo->address[5]);
 
-        ESP_LOGI(TAG, " Device Found: '%s' | MAC: %s | RSSI: %d dBm %s", 
-                 deviceInfo->name, macStr, deviceInfo->rssi,
-                 isTarget ? "[TARGET]" : "");
-
-        // Usar el parámetro isTarget en lugar de verificar nombre nuevamente
-        if (isTarget && g_client != nullptr && !g_client->isConnected()) {
-            ESP_LOGI(TAG, " TARGET VERIFIED! Stopping scan and connecting...");
-            
-            // Solo detener scan - la conexión se manejará en el callback de scan completed
-            g_client->stopScan();
-        }
+    if (isTarget) {
+        ESP_LOGI(TAG, "*** TARGET FOUND: '%s' | MAC: %s | RSSI: %d dBm ***", 
+                 deviceInfo->name, macStr, deviceInfo->rssi);
+        // La librería se encarga de detener el scan y conectar automáticamente
+    } else {
+        // Log menos frecuente para otros dispositivos (solo debug)
+        ESP_LOGD(TAG, "Device: '%s' | MAC: %s | RSSI: %d dBm", 
+                 deviceInfo->name, macStr, deviceInfo->rssi);
     }
 }
 
@@ -64,7 +60,7 @@ void onConnected(const bleDeviceInfo_t* deviceInfo) {
             deviceInfo->address[0], deviceInfo->address[1], deviceInfo->address[2],
             deviceInfo->address[3], deviceInfo->address[4], deviceInfo->address[5]);
 
-    ESP_LOGI(TAG, "\n🎉 CONNECTION SUCCESSFUL! 🎉");
+    ESP_LOGI(TAG, "\n CONNECTION SUCCESSFUL! 🎉");
     ESP_LOGI(TAG, "   Device: %s", deviceInfo->name);
     ESP_LOGI(TAG, "   MAC: %s", macStr);
     ESP_LOGI(TAG, "   RSSI: %d dBm\n", deviceInfo->rssi);
@@ -87,7 +83,7 @@ void onDisconnected(int reason, bool wasPlanned) {
 
 // Callback cuando inicia el scan
 void onScanStarted(uint32_t duration) {
-    ESP_LOGI(TAG, " 🔍 Scanning for %lu ms...", duration);
+    ESP_LOGI(TAG, "  Scanning for %lu ms...", duration);
 }
 
 // Callback cuando termina el scan
@@ -233,7 +229,7 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "BLE Services started");
 
     // Step 9: Main monitoring loop (MUY SIMPLIFICADO)
-    ESP_LOGI(TAG, "\n🔎 Starting search for device: %s\n", TARGET_DEVICE_NAME);
+    ESP_LOGI(TAG, "\n Starting search for device: %s\n", TARGET_DEVICE_NAME);
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -245,7 +241,7 @@ extern "C" void app_main() {
             if (counter % 5 == 0) {
                 const bleDataPacket_t* data = client->kgetLastData();
                 if (data != nullptr && data->valid) {
-                    ESP_LOGI(TAG, " 📊 Data: Battery=%d%%, Custom=%s",
+                    ESP_LOGI(TAG, "  Data: Battery=%d%%, Custom=%s",
                              data->batteryLevel, data->customData);
                 } else {
                     ESP_LOGD(TAG, " Requesting fresh data...");
@@ -254,9 +250,21 @@ extern "C" void app_main() {
                 }
             }
             
+            // Enviar datos al servidor cada 10 segundos
+            if (counter % 10 == 0) {
+                char sendBuffer[64];
+                snprintf(sendBuffer, sizeof(sendBuffer), "{\"client\":\"ESP32\",\"counter\":%lu}", counter);
+                esp_err_t writeRet = client->writeCustomData(sendBuffer);
+                if (writeRet == ESP_OK) {
+                    ESP_LOGI(TAG, ">> Sent to server: %s", sendBuffer);
+                } else {
+                    ESP_LOGW(TAG, ">> Failed to send data: %s", esp_err_to_name(writeRet));
+                }
+            }
+            
             // Status menos frecuente cuando conectado
             if (counter % 30 == 0) {
-                ESP_LOGI(TAG, "\n=== ✅ Connected Status (t=%lu s) ===", counter);
+                ESP_LOGI(TAG, "\n===  Connected Status (t=%lu s) ===", counter);
                 ESP_LOGI(TAG, "State: %s", client->kgetStateString());
                 
                 bleClientStats_t stats = client->getStats();
@@ -269,7 +277,7 @@ extern "C" void app_main() {
         else {
             // Status cada 10 segundos cuando desconectado
             if (counter % 10 == 0) {
-                ESP_LOGI(TAG, "\n=== 🔍 Searching Status (t=%lu s) ===", counter);
+                ESP_LOGI(TAG, "\n===  Searching Status (t=%lu s) ===", counter);
                 ESP_LOGI(TAG, "State: %s", client->kgetStateString());
                 ESP_LOGI(TAG, "Scanning: %s", client->isScanning() ? "YES" : "NO");
                 
