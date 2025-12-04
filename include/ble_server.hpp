@@ -59,30 +59,6 @@ typedef struct {
 } bleServerConfig_t;
 
 /**
- * @enum bleConfirmationStatus_t
- * @brief Status of data confirmation from client
- */
-typedef enum {
-    BLE_CONFIRM_PENDING,                            ///< Waiting for confirmation
-    BLE_CONFIRM_ACKNOWLEDGED,                       ///< Client acknowledged receipt
-    BLE_CONFIRM_TIMEOUT,                            ///< Confirmation timeout
-    BLE_CONFIRM_NOT_REQUIRED                        ///< Confirmation not needed
-} bleConfirmationStatus_t;
-
-/**
- * @struct clientConfirmationStatus_t
- * @brief Track confirmation status for each client
- */
-typedef struct {
-    bool dataAcknowledged;                          ///< Whether current data was acknowledged
-    uint64_t lastDataSentTime;                      ///< Timestamp of last data sent
-    uint32_t pendingDataId;                         ///< ID of pending data awaiting confirmation
-    bleConfirmationStatus_t status;                 ///< Current confirmation status
-    bool autoDisconnectAfterAck;                    ///< Disconnect after receiving ack
-    uint32_t ackTimeoutMs;                          ///< Timeout for acknowledgment in ms
-} clientConfirmationStatus_t;
-
-/**
  * @struct bleClientSession_t
  * @brief Information about a connected client session
  */
@@ -102,8 +78,6 @@ typedef struct {
     
     char jsonBuffer[512];                           ///< Buffer for accumulating JSON data
     uint16_t jsonBufferPos;                         ///< Current position in JSON buffer
-    
-    clientConfirmationStatus_t confirmationStatus;  ///< Confirmation tracking
 } bleClientSession_t;
 
 /**
@@ -530,57 +504,6 @@ public:
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
     esp_err_t generateStatusReport(char* buffer, size_t buffer_size) const;
-
-    /**************************************************************************/
-    /*                         Confirmation Tracking Methods                  */
-    /**************************************************************************/
-
-    /**
-     * @brief Wait for client acknowledgment of sent data
-     * 
-     * @param connID Connection ID of the client
-     * @param timeoutMs Timeout in milliseconds
-     * @return esp_err_t ESP_OK if acknowledged, ESP_ERR_TIMEOUT if timeout
-     */
-    esp_err_t waitForClientAck(uint16_t connID, uint32_t timeoutMs);
-
-    /**
-     * @brief Handle acknowledgment received from client
-     * 
-     * @param connID Connection ID of the client
-     * @param dataId ID of the acknowledged data
-     * @return esp_err_t ESP_OK on success
-     */
-    esp_err_t handleClientAck(uint16_t connID, uint32_t dataId);
-
-    /**
-     * @brief Enable/disable auto-disconnect after acknowledgment for a client
-     * 
-     * @param connID Connection ID of the client
-     * @param autoDisconnect Whether to auto-disconnect
-     * @param timeoutMs Acknowledgment timeout in milliseconds
-     * @return esp_err_t ESP_OK on success
-     */
-    esp_err_t setClientConfirmationMode(uint16_t connID, bool autoDisconnect, uint32_t timeoutMs);
-
-    /**
-     * @brief Send data with confirmation tracking
-     * 
-     * @param connID Connection ID of the client
-     * @param data Data to send
-     * @param requireAck Whether acknowledgment is required
-     * @param autoDisconnect Whether to disconnect after ack
-     * @return esp_err_t ESP_OK on success
-     */
-    esp_err_t sendDataWithConfirmation(uint16_t connID, const char* data, bool requireAck, bool autoDisconnect);
-
-    /**
-     * @brief Get confirmation status for a client
-     * 
-     * @param connID Connection ID of the client
-     * @return bleConfirmationStatus_t Current confirmation status
-     */
-    bleConfirmationStatus_t getClientConfirmationStatus(uint16_t connID) const;
 
 protected:
     /**************************************************************************/

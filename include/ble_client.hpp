@@ -57,8 +57,6 @@ typedef struct {
     uint32_t connectionTimeout;                     
     bool enableNotifications;                       
     uint32_t readInterval;                          
-    bool autoSendAcknowledgments;                   ///< Automatically send acks for received data
-    bool disconnectAfterAck;                        ///< Disconnect after sending acknowledgment
 } bleClientConfig_t;
 
 /**
@@ -94,15 +92,6 @@ typedef void (*bleClientDisconnectedCB_t)(int reason, bool wasPlanned);
  * @param data Pointer to received data packet
  */
 typedef void (*bleClientDataReceivedCB_t)(const bleDataPacket_t* data);
-
-/**
- * @brief Enhanced callback for data received with acknowledgment options
- * @param data Pointer to received data packet
- * @param shouldAck Whether client should send acknowledgment
- * @param shouldDisconnect Whether to disconnect after acknowledgment
- */
-typedef void (*bleClientDataReceivedWithAckCB_t)(const bleDataPacket_t* data, 
-                                                 bool shouldAck, bool shouldDisconnect);
 
 /**
  * @brief Callback for when a target device is found during scanning
@@ -295,16 +284,9 @@ public:
     /**
      * @brief Registers callback for data reception events
      * 
-     * @param callback Function to call when data is received from server
+     * @param callback Function to call when data is received
      */
     void setDataReceivedCallback(bleClientDataReceivedCB_t callback);
-
-    /**
-     * @brief Registers enhanced callback for data reception with acknowledgment options
-     * 
-     * @param callback Function to call when data is received with ack options
-     */
-    void setDataReceivedWithAckCallback(bleClientDataReceivedWithAckCB_t callback);
 
     /**
      * @brief Registers callback for device discovery events
@@ -354,27 +336,6 @@ public:
      * @return esp_err_t ESP_OK on success, error code otherwise
      */
     esp_err_t startDiscoveryScan(uint32_t duration = 15000);
-
-    /**************************************************************************/
-    /*                         Acknowledgment Methods                         */
-    /**************************************************************************/
-
-    /**
-     * @brief Send acknowledgment to server for received data
-     * 
-     * @param dataId ID of the data to acknowledge (0 for general ack)
-     * @return esp_err_t ESP_OK on success, error code otherwise
-     */
-    esp_err_t sendDataAcknowledgment(uint32_t dataId = 0);
-
-    /**
-     * @brief Enable/disable automatic acknowledgment sending
-     * 
-     * @param autoAck Whether to automatically send acknowledgments
-     * @param disconnectAfterAck Whether to disconnect after sending ack
-     * @return esp_err_t ESP_OK on success
-     */
-    esp_err_t setAutoAcknowledgment(bool autoAck, bool disconnectAfterAck = false);
 
     /**
      * @brief Inicia un escaneo filtrado buscando solo el dispositivo objetivo
@@ -676,14 +637,8 @@ private:
     bleClientConnectedCB_t connectedCB_;      ///< Connection callback
     bleClientDisconnectedCB_t disconnectedCB_; ///< Disconnection callback
     bleClientDataReceivedCB_t dataReceivedCB_; ///< Data received callback
-    bleClientDataReceivedWithAckCB_t dataReceivedWithAckCB_; ///< Enhanced data received callback
     bleClientDeviceFoundCB_t deviceFoundCB_; ///< Device found callback
     bleClientAuthCB_t authCB_;                ///< Authentication callback
-    
-    // Acknowledgment settings
-    bool autoSendAcknowledgments_;             ///< Auto-send acknowledgments
-    bool disconnectAfterAck_;                  ///< Disconnect after sending ack
-    uint32_t lastReceivedDataId_;              ///< ID of last received data
     
     // Task handles
     TaskHandle_t dataReadTaskHandle_;          ///< Data reading task handle

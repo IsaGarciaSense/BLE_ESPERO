@@ -11,7 +11,6 @@
 #include "ble_client.hpp"
 
 #include "esp_random.h"
-#include <cJSON.h>
 
 /******************************************************************************/
 /*                              Static Variables                              */
@@ -50,12 +49,8 @@ BLEClient::BLEClient()
     , connectedCB_(nullptr)
     , disconnectedCB_(nullptr)
     , dataReceivedCB_(nullptr)
-    , dataReceivedWithAckCB_(nullptr)
     , deviceFoundCB_(nullptr)
     , authCB_(nullptr)
-    , autoSendAcknowledgments_(false)
-    , disconnectAfterAck_(false)
-    , lastReceivedDataId_(0)
     , dataReadTaskHandle_(nullptr)
     , reconnectTaskHandle_(nullptr)
     , stateMutex_(nullptr)
@@ -79,8 +74,6 @@ BLEClient::BLEClient()
     config_.connectionTimeout = 10000;
     config_.enableNotifications = true;
     config_.readInterval = 5000;
-    config_.autoSendAcknowledgments = false;
-    config_.disconnectAfterAck = false;
 
     // Initialize security configuration
     bleCreateDefaultSecurityConfig(&securityConfig_, BLE_SECURITY_BASIC);
@@ -95,11 +88,6 @@ BLEClient::BLEClient()
     
     // Initialize RX buffer
     memset(rxBuffer_, 0, sizeof(rxBuffer_));
-    
-    // Initialize acknowledgment settings
-    autoSendAcknowledgments_ = false;
-    disconnectAfterAck_ = false;
-    lastReceivedDataId_ = 0;
 
     // Create mutex
     stateMutex_ = xSemaphoreCreateMutex();
@@ -530,67 +518,6 @@ void BLEClient::setScanStartedCallback(bleClientScanStartedCB_t callback) {
 void BLEClient::setScanCompletedCallback(bleClientScanCompletedCB_t callback) {
     scanCompletedCB_ = callback;
     ESP_LOGD(TAG, "Scan completed callback registered");
-}
-
-void BLEClient::setDataReceivedWithAckCallback(bleClientDataReceivedWithAckCB_t callback) {
-    dataReceivedWithAckCB_ = callback;
-    ESP_LOGD(TAG, "Data received with acknowledgment callback registered");
-}
-
-/******************************************************************************/
-/*                         Acknowledgment Methods                            */
-/******************************************************************************/
-
-esp_err_t BLEClient::sendDataAcknowledgment(uint32_t dataId) {
-    if (!isConnected() || customCharHandle_ == BLE_INVALID_HANDLE) {
-        ESP_LOGW(TAG, "Cannot send acknowledgment - not connected or no custom characteristic");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    ESP_LOGI(TAG, "Sending acknowledgment for data ID %lu", dataId);
-
-    // Create acknowledgment JSON
-    cJSON *ack = cJSON_CreateObject();
-    cJSON_AddStringToObject(ack, "type", "ack");
-    cJSON_AddNumberToObject(ack, "data_id", dataId);
-    cJSON_AddNumberToObject(ack, "timestamp", bleGetTimestamp() / 1000);
-    cJSON_AddStringToObject(ack, "status", "received");
-
-    char *json_string = cJSON_Print(ack);
-    
-    esp_err_t ret = writeCustomData(json_string);
-    
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Acknowledgment sent successfully for data ID %lu", dataId);
-        
-        // Check if we should disconnect after acknowledgment
-        if (disconnectAfterAck_ || config_.disconnectAfterAck) {
-            ESP_LOGI(TAG, "Disconnecting after acknowledgment as configured");
-            vTaskDelay(pdMS_TO_TICKS(100)); // Allow ack to be sent before disconnecting
-            ret = disconnect(true);
-        }
-    } else {
-        ESP_LOGE(TAG, "Failed to send acknowledgment: %s", esp_err_to_name(ret));
-    }
-    
-    free(json_string);
-    cJSON_Delete(ack);
-    
-    return ret;
-}
-
-esp_err_t BLEClient::setAutoAcknowledgment(bool autoAck, bool disconnectAfterAck) {
-    autoSendAcknowledgments_ = autoAck;
-    disconnectAfterAck_ = disconnectAfterAck;
-    
-    // Also update config for consistency
-    config_.autoSendAcknowledgments = autoAck;
-    config_.disconnectAfterAck = disconnectAfterAck;
-    
-    ESP_LOGI(TAG, "Auto-acknowledgment configured: autoAck=%s, disconnectAfterAck=%s", 
-             autoAck ? "true" : "false", disconnectAfterAck ? "true" : "false");
-    
-    return ESP_OK;
 }
 
 
@@ -1496,43 +1423,6 @@ void BLEClient::handleIncomingData(const uint8_t* data, uint16_t length) {
         memcpy(tempBuffer, data, length);
         tempBuffer[length] = '\0';
         
-        // Parse JSON to check for acknowledgment requirements
-        cJSON *json = cJSON_Parse(tempBuffer);
-        bool requiresAck = false;
-        bool shouldDisconnect = false;
-        uint32_t dataId = 0;
-        
-        if (json != nullptr) {
-            cJSON *type = cJSON_GetObjectItem(json, "type");
-            cJSON *requiresAckJson = cJSON_GetObjectItem(json, "requires_ack");
-            cJSON *dataIdJson = cJSON_GetObjectItem(json, "data_id");
-            
-            if (requiresAckJson != nullptr && cJSON_IsBool(requiresAckJson)) {
-                requiresAck = cJSON_IsTrue(requiresAckJson);
-            }
-            
-            if (dataIdJson != nullptr && cJSON_IsNumber(dataIdJson)) {
-                dataId = (uint32_t)dataIdJson->valueint;
-                lastReceivedDataId_ = dataId;
-            }
-            
-            // Check for specific control messages
-            if (type != nullptr && cJSON_IsString(type)) {
-                if (strcmp(type->valuestring, "data_with_ack") == 0) {
-                    requiresAck = true;
-                }
-                
-                // Handle ack_received response
-                if (strcmp(type->valuestring, "ack_received") == 0) {
-                    ESP_LOGI(TAG, "Server confirmed receipt of our acknowledgment");
-                    cJSON_Delete(json);
-                    return;
-                }
-            }
-            
-            cJSON_Delete(json);
-        }
-        
         // Verificar si es JSON de control
         if (strstr(tempBuffer, "large_data_incoming") != nullptr) {
             ESP_LOGI(TAG, " Large data incoming notification received");
@@ -1556,16 +1446,7 @@ void BLEClient::handleIncomingData(const uint8_t* data, uint16_t length) {
                 ESP_LOGI(TAG, " Large data assembled (%d bytes): %.*s", 
                          rxBufferPos_, (rxBufferPos_ > 50 ? 50 : rxBufferPos_), rxBuffer_);
                 
-                // Handle acknowledgment for large data
-                if (requiresAck && (autoSendAcknowledgments_ || config_.autoSendAcknowledgments)) {
-                    ESP_LOGI(TAG, "Auto-sending acknowledgment for large data (ID: %lu)", dataId);
-                    sendDataAcknowledgment(dataId);
-                }
-                
-                // Call enhanced callback if available
-                if (dataReceivedWithAckCB_ != nullptr) {
-                    dataReceivedWithAckCB_(&lastData_, requiresAck, disconnectAfterAck_);
-                } else if (dataReceivedCB_ != nullptr) {
+                if (dataReceivedCB_ != nullptr) {
                     dataReceivedCB_(&lastData_);
                 }
             }
@@ -1578,31 +1459,6 @@ void BLEClient::handleIncomingData(const uint8_t* data, uint16_t length) {
             // Procesar información de capacidades MTU del servidor
             return;
         }
-        
-        // Normal data with possible ack requirement
-        memcpy(lastData_.customData, data, 
-               length < BLE_MAX_CUSTOM_DATA_LEN ? length : BLE_MAX_CUSTOM_DATA_LEN - 1);
-        lastData_.customData[length] = '\0';
-        lastData_.timeStamp = bleGetTimestamp();
-        lastData_.valid = true;
-        
-        ESP_LOGI(TAG, " Data received (%d bytes)%s: %s", length, 
-                 requiresAck ? " [ACK REQUIRED]" : "", lastData_.customData);
-        
-        // Handle automatic acknowledgment
-        if (requiresAck && (autoSendAcknowledgments_ || config_.autoSendAcknowledgments)) {
-            ESP_LOGI(TAG, "Auto-sending acknowledgment for data (ID: %lu)", dataId);
-            sendDataAcknowledgment(dataId);
-        }
-        
-        // Call enhanced callback if available
-        if (dataReceivedWithAckCB_ != nullptr) {
-            dataReceivedWithAckCB_(&lastData_, requiresAck, disconnectAfterAck_);
-        } else if (dataReceivedCB_ != nullptr) {
-            dataReceivedCB_(&lastData_);
-        }
-        
-        return;
     }
     
     // Si esperamos datos grandes, acumular en buffer
