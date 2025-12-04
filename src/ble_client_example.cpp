@@ -96,14 +96,41 @@ void onScanCompleted(uint32_t found, bool targetFound) {
     }
 }
 
+// Enhanced callback for data received with acknowledgment options
+void onDataReceivedWithAck(const bleDataPacket_t* data, bool shouldAck, bool shouldDisconnect) {
+    if (!data || !data->valid) return;
+    
+    ESP_LOGI(TAG, "\n DATA RECEIVED WITH ACKNOWLEDGMENT OPTIONS:");
+    ESP_LOGI(TAG, "   Battery: %d%%", data->batteryLevel);
+    ESP_LOGI(TAG, "   Custom: %s", data->customData);
+    ESP_LOGI(TAG, "   Requires ACK: %s", shouldAck ? "YES" : "NO");
+    ESP_LOGI(TAG, "   Should Disconnect: %s\n", shouldDisconnect ? "YES" : "NO");
+    
+    // Manual acknowledgment demonstration (if auto-ack is disabled)
+    if (shouldAck && g_client != nullptr) {
+        ESP_LOGI(TAG, " Manually sending acknowledgment...");
+        esp_err_t ret = g_client->sendDataAcknowledgment(0); // Use 0 for general ack
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, " Acknowledgment sent successfully");
+        } else {
+            ESP_LOGE(TAG, " Failed to send acknowledgment: %s", esp_err_to_name(ret));
+        }
+    }
+}
+
 /******************************************************************************/
 /*                              Main Function                                 */
 /******************************************************************************/
 
 extern "C" void app_main() {
-    ESP_LOGI(TAG, "\n=== BLE CLIENT NAME TARGETING EXAMPLE ===");
+    ESP_LOGI(TAG, "\n=== BLE CLIENT ACKNOWLEDGMENT DEMONSTRATION ===");
     ESP_LOGI(TAG, "Target Device Name: %s", TARGET_DEVICE_NAME);
-    ESP_LOGI(TAG, "========================================\n");
+    ESP_LOGI(TAG, "Features Demonstrated:");
+    ESP_LOGI(TAG, "  • Manual acknowledgment handling");
+    ESP_LOGI(TAG, "  • Automatic acknowledgment mode");
+    ESP_LOGI(TAG, "  • Auto-disconnect after acknowledgment");
+    ESP_LOGI(TAG, "  • Enhanced data received callbacks");
+    ESP_LOGI(TAG, "=============================================\n");
 
     // Step 1: Initialize NVS
     esp_err_t ret = nvs_flash_init();
@@ -176,6 +203,10 @@ extern "C" void app_main() {
     clientConfig.reconnectInterval = 5000;
     clientConfig.enableNotifications = true;
     clientConfig.readInterval = 5000;
+    
+    // 🎯 NEW: Configure acknowledgment settings
+    clientConfig.autoSendAcknowledgments = false; // Manual ack for demonstration
+    clientConfig.disconnectAfterAck = false;      // Stay connected after ack
 
     ret = client->setConfig(clientConfig);
     if (ret != ESP_OK) {
@@ -184,6 +215,7 @@ extern "C" void app_main() {
         return;
     }
     ESP_LOGI(TAG, " Client configuration applied");
+    ESP_LOGI(TAG, " 🔧 Acknowledgment mode: MANUAL (auto=false, disconnect=false)");
 
     // Step 6: Configure security
     ESP_LOGI(TAG, "\n--- Configuring Security ---");
@@ -214,8 +246,14 @@ extern "C" void app_main() {
     client->setDisconnectedCallback(onDisconnected);
     client->setScanStartedCallback(onScanStarted);
     client->setScanCompletedCallback(onScanCompleted);
+    
+    // 🎯 NEW: Register enhanced data received callback with acknowledgment support
+    client->setDataReceivedWithAckCallback(onDataReceivedWithAck);
 
-    ESP_LOGI(TAG, " Callbacks configured");
+    ESP_LOGI(TAG, " Callbacks configured (including enhanced data callback)");
+    
+    // 🎯 OPTIONAL: Demonstrate auto-acknowledgment mode switch after 30 seconds
+    // client->setAutoAcknowledgment(true, false); // Enable auto-ack, stay connected
 
     // Step 8: Start BLE services
     ESP_LOGI(TAG, "\n--- Starting BLE Services ---");
@@ -252,14 +290,30 @@ extern "C" void app_main() {
             
             // Enviar datos al servidor cada 10 segundos
             if (counter % 10 == 0) {
-                char sendBuffer[64];
-                snprintf(sendBuffer, sizeof(sendBuffer), "{\"client\":\"ESP32\",\"counter\":%lu}", counter);
+                char sendBuffer[128];
+                snprintf(sendBuffer, sizeof(sendBuffer), 
+                         "{\"client\":\"ESP32\",\"counter\":%lu,\"ack_demo\":true,\"timestamp\":%llu}", 
+                         counter, esp_timer_get_time()/1000);
                 esp_err_t writeRet = client->writeCustomData(sendBuffer);
                 if (writeRet == ESP_OK) {
-                    ESP_LOGI(TAG, ">> Sent to server: %s", sendBuffer);
+                    ESP_LOGI(TAG, "📤 Sent to server: %s", sendBuffer);
                 } else {
-                    ESP_LOGW(TAG, ">> Failed to send data: %s", esp_err_to_name(writeRet));
+                    ESP_LOGW(TAG, "❌ Failed to send data: %s", esp_err_to_name(writeRet));
                 }
+            }
+            
+            // 🎯 NEW: Switch to auto-acknowledgment mode after 60 seconds
+            if (counter == 60) {
+                ESP_LOGI(TAG, "\n🔄 SWITCHING TO AUTO-ACKNOWLEDGMENT MODE...");
+                client->setAutoAcknowledgment(true, false); // Auto-ack, stay connected
+                ESP_LOGI(TAG, "✅ Auto-acknowledgment enabled - will automatically ack received data\n");
+            }
+            
+            // 🎯 NEW: Switch to auto-disconnect mode after 120 seconds
+            if (counter == 120) {
+                ESP_LOGI(TAG, "\n🔄 SWITCHING TO AUTO-DISCONNECT MODE...");
+                client->setAutoAcknowledgment(true, true); // Auto-ack and disconnect
+                ESP_LOGI(TAG, "✅ Auto-disconnect enabled - will disconnect after ack\n");
             }
             
             // Status menos frecuente cuando conectado
